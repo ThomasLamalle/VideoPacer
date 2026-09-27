@@ -1,0 +1,60 @@
+# Pre-commit hooks: fast checks that run automatically before every commit.
+#
+# Install them once per clone with:
+#
+#     uv run pre-commit install
+#
+# Run every hook against every file with:
+#
+#     uv run pre-commit run --all-files
+#
+# Bump the pinned `rev`s (including the ones in pyproject.toml's dev group) with:
+#
+#     uv run pre-commit autoupdate
+minimum_pre_commit_version: "3.2.0"
+
+default_install_hook_types: [pre-commit]
+
+repos:
+  # Generic file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        # The test frames are ~490 KB, so keep a little headroom above the
+        # 500 KB default while still catching model weights etc.
+        args: ["--maxkb=2048"]
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: debug-statements
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+
+  # Linting and formatting. Keep this rev in sync with the `ruff` dev dependency.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.9
+    hooks:
+      - id: ruff-check
+        args: ["--fix"]
+      - id: ruff-format
+
+  # Type checking uses the project's interpreter/environment, so it resolves
+  # numpy/opencv/attrs. Keep this rev in sync with the `ty` dev dependency.
+  - repo: https://github.com/astral-sh/ty-pre-commit
+    rev: v0.0.84
+    hooks:
+      - id: ty
+
+  # Unit tests need the project's environment too, so they run through uv.
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        files: ^(.*\.py|pyproject\.toml|uv\.lock)$
+        require_serial: true

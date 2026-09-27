@@ -113,7 +113,9 @@ def get_detector(config: DetectorConfig) -> Detector:
     return detector
 
 
-def get_rbns(img: Any, bib_detector_cfg: DetectorConfig, number_reader_cfg: DetectorConfig) -> list[list[Any]]:
+def get_rbns(
+    img: Any, bib_detector_cfg: DetectorConfig, number_reader_cfg: DetectorConfig
+) -> list[list[Any]]:
     """Return bib numbers and bib bounding boxes for the detected bibs.
 
     Args

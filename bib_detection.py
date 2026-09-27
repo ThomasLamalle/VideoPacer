@@ -101,7 +101,9 @@ def main() -> None:
     video_path = Path(__file__).resolve().parent / "sample1" / "video.mp4"
 
     only_inspect_x_frames = 100
-    output_path = video_path.with_name(f"{video_path.stem}_annotated_{only_inspect_x_frames}_fps.mp4")
+    output_path = video_path.with_name(
+        f"{video_path.stem}_annotated_{only_inspect_x_frames}_fps.mp4"
+    )
 
     cap = cv.VideoCapture(str(video_path))
     if not cap.isOpened():
