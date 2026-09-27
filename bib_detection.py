@@ -5,7 +5,7 @@ import cv2 as cv
 from attrs import frozen
 from loguru import logger
 
-import utils as ut
+import detector as ut
 
 # Bib detection model config (RBNR: locates the bib on a runner)
 BD_CONFIG = ut.DetectorConfig(
