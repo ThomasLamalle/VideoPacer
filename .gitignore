@@ -1,0 +1,10 @@
+*.mp4
+bibobj/**
+*.pyc
+
+# Local environments and tool caches
+__pycache__/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.ty/
