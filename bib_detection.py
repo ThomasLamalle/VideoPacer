@@ -13,6 +13,7 @@ First 150 frames:
 
 import argparse
 import json
+import logging
 import re
 from math import isfinite
 from pathlib import Path
@@ -21,13 +22,13 @@ from typing import TypedDict
 
 import cv2 as cv
 from attrs import evolve
-from loguru import logger
 
 import detector
 from detector import BibDetection
 from tracker import Track, Tracker, TrackResult
 
 ROOT = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 # The locator cfg declares a 416x416 input and keeps its anchors in absolute pixels
 # for that input, so squashing 1920x1080 down to 416 leaves a bib at ~14x18 px, below
 # the smallest anchor either head can match. Running the same weights at 832 puts a
@@ -63,7 +64,6 @@ class Summary(TypedDict):
     read_every: int
     input_size: int
     bib_pattern: str
-    detection_runs: int
     detection_frames: list[int]
     tracks: list[TrackResult]
     seconds: Timings
@@ -219,7 +219,6 @@ def process_video(  # noqa: PLR0913, PLR0917
         "read_every": read_every,
         "input_size": input_size,
         "bib_pattern": bib_pattern,
-        "detection_runs": len(detection_frames),
         "detection_frames": detection_frames,
         "tracks": tracker.results(fps),
         "seconds": timings,
@@ -248,6 +247,7 @@ def main() -> None:
         help="Regex a digit reading must match to count as a bib number (default: %(default)s)",
     )
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     process_video(
         args.input,
         args.output_dir,

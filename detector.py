@@ -125,11 +125,6 @@ DIGIT_CROP_MARGIN = 0.5
 BIB_PATTERN = r"\d{4,5}"
 
 
-def _matches_bib_pattern(bib_string: str, bib_pattern: str) -> bool:
-    """Return whether a reading looks like a bib number."""
-    return re.fullmatch(bib_pattern, bib_string) is not None
-
-
 def read_bib(
     image: cv.typing.MatLike,
     bbox: BBox,
@@ -155,7 +150,7 @@ def read_bib(
         return None
     digits.sort(key=lambda digit: digit.bbox[0])
     bib_string = "".join(digit.class_name for digit in digits)
-    if not _matches_bib_pattern(bib_string, bib_pattern):
+    if re.fullmatch(bib_pattern, bib_string) is None:
         return None
     confidence = sum(digit.confidence for digit in digits) / len(digits)
     return BibReading(bib_string, confidence)
@@ -189,13 +184,3 @@ def read_bibs(
             else BibDetection(box.bbox, None, 0.0)
         )
     return results
-
-
-def detect_bibs(
-    image: cv.typing.MatLike,
-    bib_config: DetectorConfig,
-    digit_config: DetectorConfig,
-    bib_pattern: str = BIB_PATTERN,
-) -> list[BibDetection]:
-    """Return the bib boxes and numbers found in one image."""
-    return read_bibs(image, find_bibs(image, bib_config), digit_config, bib_pattern)

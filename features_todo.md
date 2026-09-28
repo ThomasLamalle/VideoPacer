@@ -9,7 +9,6 @@ X features needs brainstorming or analyze before consideration
 
 - Separate bib detection and bib reading clearly and use a registry pattern with a dict to easily change processing (we'll switch from yolo to RF-DETR and possibly change the digit reading too)
 
-- Investigate why bibs are detected (or read ?) so late in the video : the bibs are detected or read at least 5s after the runner is in the frame
 
 - Restore track identity or merge track with same bib string if 1) last detection is less than X=10s ago 2) atleast 3 votes on each
 
@@ -73,3 +72,9 @@ X features needs brainstorming or analyze before consideration
 ## Initial delivery focus
 
 Keep performance measurement and improvements active alongside recognition and result review. The first useful workflow is participant import plus finish video processing, approximate results, review of uncertain passages, and corrected export. Extend that workflow to live input once measured throughput and latency are sufficient on the intended hardware. Offline checkpoint support and spectator features can follow.
+
+
+# Features DONE
+
+
+- Investigate why bibs are detected (or read ?) so late in the video : the bibs are detected or read at least 5s after the runner is in the frame => It was the downscaling of the image. 832 pixels seems to right tradeoff

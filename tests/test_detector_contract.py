@@ -118,14 +118,13 @@ def test_read_bib_accepts_a_configured_bib_pattern():
     )
 
 
-def test_detect_bibs_retains_an_unreadable_box(monkeypatch):
-    bib_detector = SimpleNamespace(detect=lambda _image, _threshold: [detector.Detection("bib", (2, 3, 10, 8), 0.8)])
+def test_read_bibs_retains_an_unreadable_box(monkeypatch):
     digit_reader = SimpleNamespace(detect=lambda _crop, _threshold: [])
-    models = iter([bib_detector, digit_reader])
-    monkeypatch.setattr(detector, "get_detector", lambda _config: next(models))
+    monkeypatch.setattr(detector, "get_detector", lambda _config: digit_reader)
     config = detector.DetectorConfig("unused", "unused", ("bib",))
+    boxes = [detector.Detection("bib", (2, 3, 10, 8), 0.8)]
 
-    result = detector.detect_bibs(np.zeros((20, 20, 3), dtype=np.uint8), config, config)
+    result = detector.read_bibs(np.zeros((20, 20, 3), dtype=np.uint8), boxes, config)
 
     assert result == [detector.BibDetection((2, 3, 10, 8), None, 0.0)]
 

@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "attrs>=26.1.0",
-    "loguru>=0.7.3",
     "numpy>=2.5.3",
     "opencv-python<5",
 ]
@@ -28,9 +27,6 @@ addopts = "-ra"
 target-version = "py314"
 line-length = 120
 src = ["."]
-# Scratch script for trying a hosted inference API; not part of the pipeline
-# (it needs an optional dependency and a network/API key to run).
-exclude = ["try_roboflow.py"]
 
 [tool.ruff.lint]
 select = [
@@ -51,9 +47,6 @@ select = [
     "RUF", # Ruff-specific rules
     "SIM", # flake8-simplify
 ]
-
-[tool.ty.src]
-exclude = ["try_roboflow.py"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*.py" = ["PLR2004"]  # Literal expected values make these small fixtures readable.

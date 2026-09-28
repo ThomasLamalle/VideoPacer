@@ -46,7 +46,6 @@ def test_detects_on_schedule_and_writes_every_frame(tmp_path, monkeypatch):
 
     assert len(scans) == 3
     assert summary["processed_frames"] == 7
-    assert summary["detection_runs"] == 3
     assert summary["tracks"][0]["best_bib"] == "0012"
     assert summary["tracks"][0]["first_seconds"] == 0
     assert summary["tracks"][0]["last_seconds"] == pytest.approx(0.6)
