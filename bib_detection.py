@@ -1,5 +1,9 @@
 """Detect and track race bibs in a video.
 
+Detection runs every ``--detect-every`` frames. A smaller interval finds more
+runners and costs proportionally more detector time, because the tracker can only
+follow the bibs an earlier scan located.
+
 Full sample video:
     uv run python bib_detection.py --input sample1/video.mp4 --output-dir runs/full
 
@@ -121,11 +125,16 @@ def _open_video(input_path: Path, output_dir: Path) -> tuple[cv.VideoCapture, cv
 def process_video(
     input_path: Path,
     output_dir: Path,
-    detect_every: int = 100,
+    detect_every: int = 20,
     read_every: int = 10,
     max_frames: int | None = None,
 ) -> Summary:
-    """Track bibs through input_path and write an annotated video and summary."""
+    """Track bibs through input_path and write an annotated video and summary.
+
+    Detection runs on every ``detect_every`` frame. Every frame is still followed
+    by optical flow, so the interval only decides how often a fresh bib box is
+    located for a runner the tracker does not have yet.
+    """
     if detect_every < 1 or read_every < 1 or (max_frames is not None and max_frames < 1):
         raise ValueError("frame intervals and max_frames must be positive")
 
@@ -194,7 +203,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=ROOT / "sample1/video.mp4")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "runs/full")
-    parser.add_argument("--detect-every", type=int, default=100)
+    parser.add_argument("--detect-every", type=int, default=20)
     parser.add_argument("--read-every", type=int, default=10)
     parser.add_argument("--max-frames", type=int)
     args = parser.parse_args()

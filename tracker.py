@@ -14,7 +14,6 @@ from detector import BBox, BibDetection, DetectorLike, read_bib
 MIN_POINTS = 6
 MAX_FLOW_ERROR = 1.5
 MATCH_IOU = 0.3
-NEW_TRACK_CONFIDENCE = 0.5
 
 
 class TrackResult(TypedDict):
@@ -120,29 +119,26 @@ class Tracker:
     def active_tracks(self) -> list[Track]:
         return [track for track in self.tracks if track.active]
 
-    def follow(self, frame: cv.typing.MatLike, frame_id: int) -> bool:
-        """Move active tracks to frame and return whether any track was lost."""
+    def follow(self, frame: cv.typing.MatLike, frame_id: int) -> None:
+        """Move active tracks one frame forward and deactivate the ones that fail.
+
+        A track that loses optical flow is deactivated rather than deleted, so the
+        caller sees it leave ``active_tracks`` and can rescan before the next
+        scheduled scan.
+        """
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
         if self.previous_gray is None:
             self.previous_gray = gray
-            return False
+            return
 
-        # TODO : Do we really want to mark a track as lost if it is not detected in a frame? It could be occluded for a
-        #  few frames and then reappear. Maybe we should only mark it as lost if it is not detected for N frames in a
-        # row. What is even the purpose/advantage of knowing that a track is lost?
-        # => Knowing a track is lost lets us run bib detection immediately instead of waiting up to 100 frames.
-        # This can recover the runner's bib and start a new track, reducing missing visibility time.
-        lost = False
         for track in self.active_tracks:
             moved = _move_track(self.previous_gray, gray, track)
             if moved is None:
                 track.active = False
-                lost = True
                 continue
             track.bbox, track.points = moved
             track.last_frame = frame_id
         self.previous_gray = gray
-        return lost
 
     def correct(
         self,
@@ -150,7 +146,12 @@ class Tracker:
         detections: list[BibDetection],
         frame_id: int,
     ) -> None:
-        """Match detector boxes to active tracks and start unmatched tracks."""
+        """Match detector boxes to active tracks and start a track for the rest.
+
+        Every box the bib detector located starts a track, including one whose
+        digits could not be read, so a runner still gets tracked while its bib
+        number stays unknown. Detector confidence does not gate new tracks.
+        """
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
         used_tracks: set[int] = set()
         for detection in detections:
@@ -163,7 +164,7 @@ class Tracker:
                 track = max(candidates, key=lambda item: _iou(item.bbox, detection.bbox))
                 # avoid recomputing the IoU for the same track twice, since we compute it above already
                 # TODO: Use Hungarian algorithm for better matching
-            elif detection.confidence >= NEW_TRACK_CONFIDENCE:
+            else:
                 track = Track(
                     len(self.tracks),
                     detection.bbox,
@@ -173,8 +174,6 @@ class Tracker:
                     frame_id,
                 )
                 self.tracks.append(track)
-            else:
-                continue
 
             track.bbox = detection.bbox
             track.points = _find_points(gray, detection.bbox)

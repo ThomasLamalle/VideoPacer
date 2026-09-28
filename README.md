@@ -27,8 +27,10 @@ uv run python bib_detection.py `
   --output-dir runs/short-video
 ```
 
-Detection runs every 100 frames by default. Optical flow runs on every frame.
-Use `--detect-every` and `--read-every` to change the intervals.
+Detection runs every 20 frames by default. A smaller interval finds more runners
+and costs proportionally more detector time, because optical flow can only follow
+the bibs an earlier scan located. Use `--detect-every` and `--read-every` to
+change the intervals.
 
 Each run creates:
 

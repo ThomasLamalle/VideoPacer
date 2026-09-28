@@ -53,22 +53,28 @@ def test_detects_on_schedule_and_writes_every_frame(tmp_path, monkeypatch):
     assert count_frames(tmp_path / "out/annotated.mp4") == 7
 
 
-def test_lost_track_does_not_trigger_an_extra_detection(tmp_path, monkeypatch):
+def test_detects_only_on_schedule(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
-    make_video(source, frames=7, disappear_after=0)
-    scan_frames = []
+    make_video(source, frames=25)
+    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame, _timings=None: [])
 
-    def detect(_frame, _timings=None):
-        frame_id = len(scan_frames)
-        scan_frames.append(frame_id)
-        if len(scan_frames) == 1:
-            return [BibDetection((10, 10, 40, 20), "12", 0.9)]
-        return []
+    summary = bib_detection.process_video(source, tmp_path / "out", detect_every=10)
 
-    monkeypatch.setattr(bib_detection, "detect_bibs", detect)
-    summary = bib_detection.process_video(source, tmp_path / "out", detect_every=5)
+    assert summary["detection_frames"] == [0, 10, 20]
 
-    assert summary["detection_frames"] == [0, 5]
+
+def test_an_active_track_does_not_change_the_schedule(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    make_video(source, frames=25)
+    monkeypatch.setattr(
+        bib_detection,
+        "detect_bibs",
+        lambda _frame, _timings=None: [BibDetection((10, 10, 40, 20), "12", 0.9)],
+    )
+
+    summary = bib_detection.process_video(source, tmp_path / "out", detect_every=10)
+
+    assert summary["detection_frames"] == [0, 10, 20]
 
 
 def test_summary_contains_simple_stage_timings(tmp_path, monkeypatch):

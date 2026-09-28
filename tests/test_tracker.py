@@ -19,9 +19,8 @@ def test_optical_flow_moves_a_track():
     tracker.follow(frame(), 0)
     tracker.correct(frame(), [BibDetection((20, 20, 35, 20), "0012", 0.9)], 0)
 
-    lost = tracker.follow(frame(23), 1)
+    tracker.follow(frame(23), 1)
 
-    assert not lost
     assert tracker.active_tracks[0].bbox[:2] == pytest.approx((23, 20), abs=1)
     assert tracker.active_tracks[0].last_frame == 1
 
@@ -31,9 +30,21 @@ def test_failed_flow_deactivates_the_track():
     tracker.follow(frame(), 0)
     tracker.correct(frame(), [BibDetection((20, 20, 35, 20), None, 0.9)], 0)
 
-    assert tracker.follow(np.zeros_like(frame()), 1)
+    tracker.follow(np.zeros_like(frame()), 1)
+
     assert tracker.active_tracks == []
     assert tracker.tracks[0].last_frame == 0
+
+
+def test_unreadable_low_confidence_detection_starts_a_track():
+    tracker = Tracker()
+    tracker.follow(frame(), 0)
+
+    tracker.correct(frame(), [BibDetection((20, 20, 35, 20), None, 0.1)], 0)
+
+    assert len(tracker.tracks) == 1
+    assert tracker.tracks[0].first_frame == 0
+    assert tracker.tracks[0].votes == {}
 
 
 def test_detection_updates_an_existing_track_and_its_votes():
