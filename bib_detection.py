@@ -15,6 +15,7 @@ import argparse
 import json
 import logging
 import re
+from datetime import datetime
 from math import isfinite
 from pathlib import Path
 from time import perf_counter
@@ -231,7 +232,7 @@ def process_video(  # noqa: PLR0913, PLR0917
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=ROOT / "sample1/video.mp4")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "runs/full")
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--detect-every", type=int, default=20)
     parser.add_argument("--read-every", type=int, default=10)
     parser.add_argument("--max-frames", type=int)
@@ -247,10 +248,11 @@ def main() -> None:
         help="Regex a digit reading must match to count as a bib number (default: %(default)s)",
     )
     args = parser.parse_args()
+    output_dir = args.output_dir or ROOT / "runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     process_video(
         args.input,
-        args.output_dir,
+        output_dir,
         args.detect_every,
         args.read_every,
         args.max_frames,

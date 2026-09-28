@@ -1,9 +1,10 @@
-# Features to implement
 
 The first target is a small race that accepts approximate finish results. Processing speed is a core priority: the current pipeline is too slow for live detection, which remains a goal. Measure improvements in throughput and result latency alongside missed runners and incorrect readings.
 
 List of features to implement. Increasing numbers does not mean features depends on each other, assume independance first.
 X features needs brainstorming or analyze before consideration
+
+# Features to implement
 
 - Make detection, optical flow or reading in separate colors so I know when a detection occured, when a read occured or when both occured
 
