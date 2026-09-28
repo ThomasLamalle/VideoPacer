@@ -15,6 +15,7 @@ from time import perf_counter
 from typing import TypedDict
 
 import cv2 as cv
+from loguru import logger
 
 import detector
 from detector import BibDetection
@@ -48,7 +49,6 @@ class Summary(TypedDict):
     detect_every: int
     read_every: int
     detection_runs: int
-    recovery_runs: int
     detection_frames: list[int]
     tracks: list[TrackResult]
     seconds: Timings
@@ -87,9 +87,7 @@ def draw_tracks(frame: cv.typing.MatLike, tracks: list[Track]) -> None:
         )
 
 
-def _open_video(
-    input_path: Path, output_dir: Path
-) -> tuple[cv.VideoCapture, cv.VideoWriter, float]:
+def _open_video(input_path: Path, output_dir: Path) -> tuple[cv.VideoCapture, cv.VideoWriter, float]:
     capture = cv.VideoCapture(str(input_path))
     writer: cv.VideoWriter | None = None
     try:
@@ -142,7 +140,6 @@ def process_video(
     }
     processed_frames = 0
     detection_frames: list[int] = []
-    recovery_runs = 0
     tracker = Tracker()
 
     try:
@@ -153,14 +150,13 @@ def process_video(
             frame_id = processed_frames
 
             stage_started = perf_counter()
-            lost_track = tracker.follow(frame, frame_id)
+            tracker.follow(frame, frame_id)
             timings["optical_flow"] += perf_counter() - stage_started
 
             scheduled = frame_id % detect_every == 0
-            if scheduled or lost_track:
+            if scheduled:
                 detections = detect_bibs(frame, timings)
                 detection_frames.append(frame_id)
-                recovery_runs += int(lost_track and not scheduled)
                 tracker.correct(frame, detections, frame_id)
 
             if frame_id % read_every == 0 and tracker.active_tracks:
@@ -185,23 +181,19 @@ def process_video(
         "detect_every": detect_every,
         "read_every": read_every,
         "detection_runs": len(detection_frames),
-        "recovery_runs": recovery_runs,
         "detection_frames": detection_frames,
         "tracks": tracker.results(fps),
         "seconds": timings,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    print(
-        f"Processed {processed_frames} frames, found {len(tracker.tracks)} tracks "
-        f"in {timings['total']:.2f}s"
-    )
+    logger.info(f"Processed {processed_frames} frames, found {len(tracker.tracks)} tracks in {timings['total']:.2f}s")
     return summary
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=ROOT / "sample1/video.mp4")
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "runs/full")
     parser.add_argument("--detect-every", type=int, default=100)
     parser.add_argument("--read-every", type=int, default=10)
     parser.add_argument("--max-frames", type=int)
@@ -217,3 +209,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    #  uv run python bib_detection.py

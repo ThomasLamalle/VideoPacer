@@ -9,6 +9,8 @@ X features needs brainstorming or analyze before consideration
 
 - Investigate why bibs are not detected/read so late in the video : the bibs are detected or read at least 5s after the runner is in the frame
 
+- Restore track identity or merge track with same bib string if 1) last detection is less than X=10s ago 2) atleast 3 votes on each
+
 - Feature 1: Reduce actual work before parallelizing: frame differencing/motion detection to skip near-duplicate frames
 
 - Feature 2: Experiment with batching frames through the detector. Verify model/backend support and measure throughput, memory use, and waiting time to fill a batch. Higher throughput alone does not guarantee low live latency.

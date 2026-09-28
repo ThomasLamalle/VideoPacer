@@ -32,10 +32,7 @@ def test_detector_keeps_confidence():
 def test_read_bib_preserves_zeroes_and_unreadable_bibs(digits, expected):
     class Reader:
         def detect(self, _crop, _threshold):
-            return [
-                detector.Detection(number, (index * 3, 0, 2, 8), 0.9)
-                for index, number in enumerate(digits)
-            ]
+            return [detector.Detection(number, (index * 3, 0, 2, 8), 0.9) for index, number in enumerate(digits)]
 
     reader = Reader()
     image = np.zeros((20, 20, 3), dtype=np.uint8)
@@ -44,9 +41,7 @@ def test_read_bib_preserves_zeroes_and_unreadable_bibs(digits, expected):
 
 
 def test_detect_bibs_retains_an_unreadable_box(monkeypatch):
-    bib_detector = SimpleNamespace(
-        detect=lambda _image, _threshold: [detector.Detection("bib", (2, 3, 10, 8), 0.8)]
-    )
+    bib_detector = SimpleNamespace(detect=lambda _image, _threshold: [detector.Detection("bib", (2, 3, 10, 8), 0.8)])
     digit_reader = SimpleNamespace(detect=lambda _crop, _threshold: [])
     models = iter([bib_detector, digit_reader])
     monkeypatch.setattr(detector, "get_detector", lambda _config: next(models))

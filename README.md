@@ -28,8 +28,7 @@ uv run python bib_detection.py `
 ```
 
 Detection runs every 100 frames by default. Optical flow runs on every frame.
-If optical flow loses a track, detection runs immediately on that frame. Use
-`--detect-every` and `--read-every` to change the intervals.
+Use `--detect-every` and `--read-every` to change the intervals.
 
 Each run creates:
 
@@ -48,7 +47,7 @@ The main loop is:
 ```text
 read frame
 → follow existing tracks
-→ detect on schedule or after a lost track
+→ detect on schedule
 → read tracked bibs when scheduled
 → draw and write the frame
 ```

@@ -53,7 +53,7 @@ def test_detects_on_schedule_and_writes_every_frame(tmp_path, monkeypatch):
     assert count_frames(tmp_path / "out/annotated.mp4") == 7
 
 
-def test_lost_track_triggers_one_immediate_recovery_scan(tmp_path, monkeypatch):
+def test_lost_track_does_not_trigger_an_extra_detection(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
     make_video(source, frames=7, disappear_after=0)
     scan_frames = []
@@ -68,8 +68,7 @@ def test_lost_track_triggers_one_immediate_recovery_scan(tmp_path, monkeypatch):
     monkeypatch.setattr(bib_detection, "detect_bibs", detect)
     summary = bib_detection.process_video(source, tmp_path / "out", detect_every=5)
 
-    assert summary["detection_frames"] == [0, 1, 5]
-    assert summary["recovery_runs"] == 1
+    assert summary["detection_frames"] == [0, 5]
 
 
 def test_summary_contains_simple_stage_timings(tmp_path, monkeypatch):
@@ -142,9 +141,7 @@ def test_setup_error_releases_the_open_capture(tmp_path, monkeypatch):
 
     capture = Capture()
     monkeypatch.setattr(bib_detection.cv, "VideoCapture", lambda _path: capture)
-    monkeypatch.setattr(
-        Path, "mkdir", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError())
-    )
+    monkeypatch.setattr(Path, "mkdir", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError()))
 
     with pytest.raises(PermissionError):
         bib_detection.process_video(tmp_path / "source.mp4", tmp_path / "out")
