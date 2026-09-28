@@ -93,6 +93,7 @@ class Track:
     first_frame: int
     last_frame: int
     last_detection_frame: int
+    last_read_frame: int = -1
     votes: dict[str, float] = field(factory=dict)
     active: bool = True
 
@@ -192,6 +193,7 @@ class Tracker:
             track.last_detection_frame = frame_id
             if detection.bib_string is not None:
                 track.votes[detection.bib_string] = track.votes.get(detection.bib_string, 0.0) + detection.confidence
+                track.last_read_frame = frame_id
             used_tracks.add(track.track_id)
 
     def read(self, frame: cv.typing.MatLike, reader: DetectorLike, frame_id: int) -> None:
@@ -202,6 +204,7 @@ class Tracker:
             reading = read_bib(frame, track.bbox, reader, self.bib_pattern)
             if reading is not None:
                 track.votes[reading.bib_string] = track.votes.get(reading.bib_string, 0.0) + reading.confidence
+                track.last_read_frame = frame_id
 
     def results(self, fps: float) -> list[TrackResult]:
         """Return the final bib and visible times for every track."""

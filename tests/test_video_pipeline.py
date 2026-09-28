@@ -9,6 +9,7 @@ import pytest
 
 import bib_detection
 from detector import BibDetection
+from tracker import Track
 
 
 def make_video(path, frames: int = 7, disappear_after: int | None = None) -> None:
@@ -30,6 +31,24 @@ def count_frames(path) -> int:
         count += 1
     capture.release()
     return count
+
+
+def test_track_colors_show_detection_read_and_both_events():
+    track = Track(0, (10, 10, 20, 20), np.empty((0, 1, 2), dtype=np.float32), 0, 0, 0)
+    cases = [
+        (0, 0, (255, 255, 0)),  # optical flow
+        (1, 0, (0, 0, 255)),  # detection
+        (0, 1, (0, 255, 0)),  # successful read
+        (1, 1, (255, 0, 255)),  # both
+    ]
+    for detected_frame, read_frame, expected in cases:
+        track.last_detection_frame = detected_frame
+        track.last_read_frame = read_frame
+        image = np.zeros((40, 40, 3), dtype=np.uint8)
+
+        bib_detection.draw_tracks(image, [track], frame_id=1)
+
+        assert tuple(image[10, 10]) == expected
 
 
 def test_detects_on_schedule_and_writes_every_frame(tmp_path, monkeypatch):

@@ -56,6 +56,7 @@ def test_unreadable_detection_still_moves_an_existing_track():
     assert len(tracker.tracks) == 1
     assert tracker.tracks[0].votes == {"0012": pytest.approx(0.9)}
     assert tracker.tracks[0].last_detection_frame == 1
+    assert tracker.tracks[0].last_read_frame == 0
 
 
 def test_detection_updates_an_existing_track_and_its_votes():
@@ -69,6 +70,7 @@ def test_detection_updates_an_existing_track_and_its_votes():
     assert len(tracker.tracks) == 1
     assert tracker.tracks[0].votes == {"0012": pytest.approx(1.1)}
     assert tracker.tracks[0].last_detection_frame == 1
+    assert tracker.tracks[0].last_read_frame == 1
 
 
 def test_votes_are_weighted_by_reading_confidence():
@@ -88,6 +90,7 @@ def test_votes_are_weighted_by_reading_confidence():
     track = tracker.tracks[0]
     assert track.votes["0013"] == pytest.approx(0.9)
     assert track.best_bib == "0012"
+    assert track.last_read_frame == 3
 
 
 def test_votes_report_ties_and_conflicts():

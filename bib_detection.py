@@ -89,23 +89,26 @@ def detect_bibs(
     return bibs
 
 
-def draw_tracks(frame: cv.typing.MatLike, tracks: list[Track]) -> None:
-    """Draw active track boxes and bib readings on frame."""
+def draw_tracks(frame: cv.typing.MatLike, tracks: list[Track], frame_id: int) -> None:
+    """Draw track boxes in the color of the event on this frame."""
     for track in tracks:
+        detected = track.last_detection_frame == frame_id
+        read = track.last_read_frame == frame_id
+        event, color = (
+            ("BOTH", (255, 0, 255))
+            if detected and read
+            else ("READ", (0, 255, 0))
+            if read
+            else ("DETECT", (0, 0, 255))
+            if detected
+            else ("FLOW", (255, 255, 0))
+        )
         x, y, width, height = (int(value) for value in track.bbox)
-        label = f"T{track.track_id} bib:{track.best_bib or '?'}"
+        label = f"T{track.track_id} {event} bib:{track.best_bib or '?'}"
         if track.conflicting:
             label += " conflict"
-        cv.rectangle(frame, (x, y), (x + width, y + height), (255, 255, 0), 2)
-        cv.putText(
-            frame,
-            label,
-            (x, max(20, y - 8)),
-            cv.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (255, 255, 0),
-            2,
-        )
+        cv.rectangle(frame, (x, y), (x + width, y + height), color, 2)
+        cv.putText(frame, label, (x, max(20, y - 8)), cv.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
 
 def _open_video(input_path: Path, output_dir: Path) -> tuple[cv.VideoCapture, cv.VideoWriter, float]:
@@ -203,7 +206,7 @@ def process_video(  # noqa: PLR0913, PLR0917
                 timings["digit_reading"] += perf_counter() - stage_started
 
             stage_started = perf_counter()
-            draw_tracks(frame, tracker.active_tracks)
+            draw_tracks(frame, tracker.active_tracks, frame_id)
             writer.write(frame)
             timings["video_writing"] += perf_counter() - stage_started
             processed_frames += 1
