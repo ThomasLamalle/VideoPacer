@@ -5,11 +5,34 @@ a network from a Darknet cfg/weights pair, and :func:`get_rbns` chains a bib
 locator together with a digit reader to turn a single frame into bib numbers.
 """
 
+from functools import cache
+from time import perf_counter
 from typing import Any
 
 import cv2 as cv
 import numpy as np
 from attrs import frozen
+
+type BBox = tuple[float, float, float, float]  # x, y, width, height
+
+
+@frozen
+class Detection:
+    """One raw model result after confidence filtering and suppression."""
+
+    class_name: str
+    bbox: BBox
+    confidence: float
+
+
+@frozen
+class BibDetection:
+    """A located bib with optional OCR text and the locator confidence."""
+
+    frame_id: int
+    bbox: BBox
+    bib_string: str | None
+    confidence: float
 
 
 @frozen
@@ -40,7 +63,7 @@ class Detector:
         layer_names = self.net.getLayerNames()
         self.layer_names = [layer_names[i - 1] for i in self.net.getUnconnectedOutLayers()]
 
-    def detect(self, img: Any, conf: float) -> list[list[Any]]:
+    def detect(self, img: Any, conf: float) -> list[Detection]:
         """Detect objects in an image above a confidence threshold.
 
         Args
@@ -48,7 +71,7 @@ class Detector:
             conf (float): prediction confidence threshold
 
         Returns
-            List of detections in the form [<class name>, [x, y, width, height]]
+            Class, bounding box and confidence for each surviving detection.
         """
 
         # Format the image for detection
@@ -59,6 +82,7 @@ class Detector:
         outputs = self.net.forward(self.layer_names)
 
         h_img, w_img = img.shape[:2]
+        image_scale = np.array([w_img, h_img, w_img, h_img])
 
         boxes: list[list[int]] = []
         confidences: list[float] = []
@@ -72,7 +96,7 @@ class Detector:
 
                 # Keep only detections above the requested confidence
                 if confidence > conf:
-                    box = detection[:4] * np.array([w_img, h_img, w_img, h_img])
+                    box = detection[:4] * image_scale
                     (center_x, center_y, width, height) = box.astype("int")
                     x = int(center_x - (width / 2))
                     y = int(center_y - (height / 2))
@@ -81,16 +105,21 @@ class Detector:
                     class_ids.append(class_id)
 
         # Apply non-maximal suppression so each object is reported once
-        indices = np.asarray(cv.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)).flatten()
+        indices = np.asarray(cv.dnn.NMSBoxes(boxes, confidences, conf, 0.4)).flatten()
 
-        return [[self.classes[class_ids[i]], boxes[i]] for i in indices]
+        return [
+            Detection(
+                self.classes[class_ids[i]],
+                (boxes[i][0], boxes[i][1], boxes[i][2], boxes[i][3]),
+                confidences[i],
+            )
+            for i in indices
+        ]
 
 
 # Detectors are expensive to build (the weights are read from disk), so keep
 # one instance per configuration and reuse it.
-_DETECTOR_CACHE: dict[DetectorConfig, Detector] = {}
-
-
+@cache
 def get_detector(config: DetectorConfig) -> Detector:
     """Return a cached detector for the given model configuration.
 
@@ -105,17 +134,16 @@ def get_detector(config: DetectorConfig) -> Detector:
         Detector object
     """
 
-    detector = _DETECTOR_CACHE.get(config)
-    if detector is None:
-        detector = Detector(config)
-        _DETECTOR_CACHE[config] = detector
-
-    return detector
+    return Detector(config)
 
 
 def get_rbns(
-    img: Any, bib_detector_cfg: DetectorConfig, number_reader_cfg: DetectorConfig
-) -> list[list[Any]]:
+    img: Any,
+    bib_detector_cfg: DetectorConfig,
+    number_reader_cfg: DetectorConfig,
+    frame_id: int = 0,
+    timings: dict[str, float] | None = None,
+) -> list[BibDetection]:
     """Return bib numbers and bib bounding boxes for the detected bibs.
 
     Args
@@ -125,35 +153,53 @@ def get_rbns(
             located bib
 
     Returns
-        List of detected bib numbers and corresponding bounding boxes in
-        the format [<bib number>, [x, y, width, height]]. A bib number of 0
-        means a bib was located but no digit could be read inside it.
+        Bib boxes with confidence and an optional reading. None means unreadable;
+        strings preserve leading zeros. Confidence is the existing OpenCV Darknet
+        class score, not an independently calibrated probability.
     """
 
     # Instantiate detectors (reused across calls, see get_detector)
     bib_detector = get_detector(bib_detector_cfg)
-    number_reader = get_detector(number_reader_cfg)
-
     # Make bib location predictions
-    bib_detections = bib_detector.detect(img, 0.25)
+    started = perf_counter()
+    bib_detections = bib_detector.detect(img, 0.1)
+    if timings is not None:
+        timings["bib_detection"] += perf_counter() - started
+    if not bib_detections:
+        return []
 
-    bib_readings: list[list[Any]] = []
+    number_reader = get_detector(number_reader_cfg)
+    bib_readings: list[BibDetection] = []
     for detection in bib_detections:
-        bbox = detection[1]
-        (x, y, w, h) = bbox
-
-        # Crop out the bib so the digit reader only sees the bib itself
-        crop_img = img[y : y + h, x : x + w]
-
-        # Detect the digits inside the bib
-        digit_detections = number_reader.detect(crop_img, 0.5)
-        if digit_detections:
-            # Sort the digits left to right and join them into a single number
-            digits = sorted((digit[1][0], str(digit[0])) for digit in digit_detections)
-            bib_number = int("".join(value for _, value in digits))
-        else:
-            bib_number = 0  # bib detection but no digit detection
-
-        bib_readings.append([bib_number, bbox])
+        bib_string = read_bib(img, detection.bbox, number_reader, timings)
+        bib_readings.append(
+            BibDetection(frame_id, detection.bbox, bib_string, detection.confidence)
+        )
 
     return bib_readings
+
+
+def read_bib(
+    img: Any, bbox: BBox, number_reader: Detector, timings: dict[str, float] | None = None
+) -> str | None:
+    """Read left-to-right digits from a detected or optically tracked bib crop.
+
+    The box is clipped to image boundaries before slicing. Returns None for an
+    empty/invalid crop or when the digit detector finds nothing. The result is a
+    string, rather than an integer, so leading zeroes are preserved.
+    """
+    started = perf_counter()
+    x, y, w, h = (int(value) for value in bbox)
+    image_h, image_w = img.shape[:2]
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(image_w, x + w), min(image_h, y + h)
+    digits = []
+    if x2 > x1 and y2 > y1:
+        digits = number_reader.detect(img[y1:y2, x1:x2], 0.5)
+        if timings is not None:
+            timings["digit_crops"] = timings.get("digit_crops", 0) + 1
+    if timings is not None:
+        timings["digit_reading"] += perf_counter() - started
+    if not digits:
+        return None
+    return "".join(digit.class_name for digit in sorted(digits, key=lambda digit: digit.bbox[0]))

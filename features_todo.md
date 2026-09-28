@@ -12,19 +12,22 @@ X features needs brainstorming or analyze before consideration
 - Feature 4 :ThreadPoolExecutor with 4 workers as a quick experiment — measure the benefit on this pipeline and ensure concurrent calls do not mutate the same detector instance unsafely.
 
 
-- Feature 5: Keep track of bibs using temporary track IDs separate from recognized bib numbers. Account for lost tracks and identity switches when runners overlap. This lets us:
+- Feature 5: Keep track of bibs using temporary track IDs separate from recognized bib numbers. Use ByteTrack as the initial tracking baseline. Account for lost tracks and identity switches when runners overlap. This lets us:
     1) count votes on bibs
     2) improve bib detection ? like if we lower threshold on frame where we did not detect a bib ?
     3) Do less bib detection ? like one every X frames and between the frames we only do tracking ?
 
 - Feature 6 (depends on 5): Preserve partial and conflicting readings and combine evidence within a track. Define supported bib string patterns and retain unknown digits rather than guessing a complete number.
 
+- take into account reading score when counting vote
 
 - Feature 7 (depends on 5): Add reversible locking to reduce repeated digit reading after sufficient agreement. Reopen a decision when stronger contradictory evidence appears or track identity becomes uncertain. Repeated similar frames must not be treated as independent proof of correctness.
 
 - Feature 8: Preserve detected bibs even when their digits cannot be read. Store an unknown passage with timestamps, best bib crops, and a short surrounding clip for manual review. This does not recover runners whose bibs were never detected.
 
-- Feature X : For now we do "zero shot" detection, i.e. bib detection without any information on bibs. But before a race we should have access to what the bibs would look like (if it has logos or else) or we could even use already detected bib information to help detection ?
+- Feature X (example-based bib detection): Investigate detecting all bibs in a race from one reference bib image, starting with OpenCV ORB feature extraction and matching plus geometric verification. The goal is to locate bibs with different numbers, not to track the same bib across frames or read its digits. Test whether enough shared visual features remain when digits dominate the bib design. Evaluate localization recall, false positives, and processing time on different bib numbers excluded from the reference, including frames containing multiple runners. Treat ORB as an experimental candidate whose ability to generalize must be demonstrated. Synthetic training is outside the scope of this experiment.
+
+- Feature X (conditional optical-flow experiment; depends on evaluating 5): Investigate sparse optical flow only if benchmarks show that ByteTrack's processing time or tracking quality is insufficient. Compare an optical-flow-assisted pipeline against the ByteTrack baseline on the same footage, measuring total processing time, identity switches, lost tracks, and missed runners. Define periodic detection and recovery when tracking fails. Do not assume optical flow is a drop-in replacement for ByteTrack or that it will improve performance.
 
 - Feature 9: Create a focused organizer UI: import participants, configure timing, process an uploaded video or live feed, inspect processing progress and lag, resolve uncertain passages, and export results.
 
