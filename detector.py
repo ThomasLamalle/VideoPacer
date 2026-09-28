@@ -103,19 +103,29 @@ def read_bib(image: cv.typing.MatLike, bbox: BBox, reader: DetectorLike) -> str 
     return "".join(digit.class_name for digit in digits)
 
 
+def find_bibs(image: cv.typing.MatLike, config: DetectorConfig) -> list[Detection]:
+    """Find bib boxes in one video frame."""
+    return get_detector(config).detect(image, 0.1)
+
+
+def read_bibs(
+    image: cv.typing.MatLike,
+    boxes: list[Detection],
+    digit_config: DetectorConfig,
+) -> list[BibDetection]:
+    """Read the number inside each detected bib box."""
+    if not boxes:
+        return []
+    reader = get_detector(digit_config)
+    return [
+        BibDetection(box.bbox, read_bib(image, box.bbox, reader), box.confidence) for box in boxes
+    ]
+
+
 def detect_bibs(
     image: cv.typing.MatLike,
     bib_config: DetectorConfig,
     digit_config: DetectorConfig,
 ) -> list[BibDetection]:
     """Return the bib boxes and numbers found in one image."""
-    bib_detector = get_detector(bib_config)
-    boxes = bib_detector.detect(image, 0.1)
-    if not boxes:
-        return []
-
-    digit_reader = get_detector(digit_config)
-    return [
-        BibDetection(box.bbox, read_bib(image, box.bbox, digit_reader), box.confidence)
-        for box in boxes
-    ]
+    return read_bibs(image, find_bibs(image, bib_config), digit_config)

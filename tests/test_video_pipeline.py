@@ -1,5 +1,8 @@
 """Tests for the direct video-processing loop."""
 
+from pathlib import Path
+from time import sleep
+
 import cv2 as cv
 import numpy as np
 import pytest
@@ -34,7 +37,7 @@ def test_detects_on_schedule_and_writes_every_frame(tmp_path, monkeypatch):
     make_video(source)
     scans = []
 
-    def detect(_frame):
+    def detect(_frame, _timings=None):
         scans.append(len(scans))
         return [BibDetection((10, 10, 40, 20), "0012", 0.9)]
 
@@ -55,7 +58,7 @@ def test_lost_track_triggers_one_immediate_recovery_scan(tmp_path, monkeypatch):
     make_video(source, frames=7, disappear_after=0)
     scan_frames = []
 
-    def detect(_frame):
+    def detect(_frame, _timings=None):
         frame_id = len(scan_frames)
         scan_frames.append(frame_id)
         if len(scan_frames) == 1:
@@ -72,7 +75,7 @@ def test_lost_track_triggers_one_immediate_recovery_scan(tmp_path, monkeypatch):
 def test_summary_contains_simple_stage_timings(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
     make_video(source, frames=2)
-    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame: [])
+    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame, _timings=None: [])
 
     summary = bib_detection.process_video(source, tmp_path / "out")
 
@@ -94,9 +97,76 @@ def test_summary_contains_simple_stage_timings(tmp_path, monkeypatch):
 def test_max_frames_limits_the_output(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
     make_video(source, frames=7)
-    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame: [])
+    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame, _timings=None: [])
 
     summary = bib_detection.process_video(source, tmp_path / "out", max_frames=3)
 
     assert summary["processed_frames"] == 3
     assert count_frames(tmp_path / "out/annotated.mp4") == 3
+
+
+def test_reads_a_surviving_track_that_detection_misses(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    make_video(source, frames=3)
+    scans = 0
+
+    def detect(_frame, _timings=None):
+        nonlocal scans
+        scans += 1
+        return [BibDetection((10, 10, 40, 20), None, 0.9)] if scans == 1 else []
+
+    class Reader:
+        def detect(self, _image, _confidence):
+            return [bib_detection.detector.Detection("12", (0, 0, 1, 1), 0.9)]
+
+    monkeypatch.setattr(bib_detection, "detect_bibs", detect)
+    monkeypatch.setattr(bib_detection.detector, "get_detector", lambda _config: Reader())
+
+    summary = bib_detection.process_video(source, tmp_path / "out", detect_every=1, read_every=1)
+
+    assert summary["tracks"][0]["votes"] == {"12": 2}
+
+
+def test_setup_error_releases_the_open_capture(tmp_path, monkeypatch):
+    class Capture:
+        released = False
+
+        def isOpened(self):  # noqa: N802 - OpenCV uses this method name.
+            return True
+
+        def get(self, _property):
+            return 10.0
+
+        def release(self):
+            self.released = True
+
+    capture = Capture()
+    monkeypatch.setattr(bib_detection.cv, "VideoCapture", lambda _path: capture)
+    monkeypatch.setattr(
+        Path, "mkdir", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError())
+    )
+
+    with pytest.raises(PermissionError):
+        bib_detection.process_video(tmp_path / "source.mp4", tmp_path / "out")
+
+    assert capture.released
+
+
+def test_detector_ocr_has_its_own_timing(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    make_video(source, frames=1)
+    monkeypatch.setattr(
+        bib_detection.detector,
+        "find_bibs",
+        lambda _frame, _config: [bib_detection.detector.Detection("bib", (10, 10, 40, 20), 0.9)],
+    )
+
+    def read_bibs(_frame, _boxes, _config):
+        sleep(0.002)
+        return [BibDetection((10, 10, 40, 20), "12", 0.9)]
+
+    monkeypatch.setattr(bib_detection.detector, "read_bibs", read_bibs)
+
+    summary = bib_detection.process_video(source, tmp_path / "out")
+
+    assert summary["seconds"]["digit_reading"] >= 0.002

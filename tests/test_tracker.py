@@ -60,7 +60,8 @@ def test_votes_report_ties_and_conflicts():
 
     reader = Reader()
 
-    tracker.read(frame(), reader)
+    tracker.follow(frame(22), 1)
+    tracker.read(frame(22), reader, 1)
 
     track = tracker.tracks[0]
     assert track.best_bib is None

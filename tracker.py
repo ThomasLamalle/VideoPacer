@@ -182,9 +182,11 @@ class Tracker:
                 track.votes[detection.number] += 1
             used_tracks.add(track.track_id)
 
-    def read(self, frame: cv.typing.MatLike, reader: DetectorLike) -> None:
-        """Read each active bib box and add successful readings to its votes."""
+    def read(self, frame: cv.typing.MatLike, reader: DetectorLike, frame_id: int) -> None:
+        """Read active bibs that the detector did not already read on this frame."""
         for track in self.active_tracks:
+            if track.last_detection_frame == frame_id:
+                continue
             number = read_bib(frame, track.bbox, reader)
             if number is not None:
                 track.votes[number] += 1

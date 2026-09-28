@@ -54,9 +54,18 @@ class Summary(TypedDict):
     seconds: Timings
 
 
-def detect_bibs(frame: cv.typing.MatLike) -> list[BibDetection]:
-    """Return bibs detected in frame."""
-    return detector.detect_bibs(frame, BIB_MODEL, DIGIT_MODEL)
+def detect_bibs(frame: cv.typing.MatLike, timings: Timings | None = None) -> list[BibDetection]:
+    """Find bib boxes and read their numbers in one video frame."""
+    started = perf_counter()
+    boxes = detector.find_bibs(frame, BIB_MODEL)
+    if timings is not None:
+        timings["detection"] += perf_counter() - started
+
+    started = perf_counter()
+    bibs = detector.read_bibs(frame, boxes, DIGIT_MODEL)
+    if timings is not None:
+        timings["digit_reading"] += perf_counter() - started
+    return bibs
 
 
 def draw_tracks(frame: cv.typing.MatLike, tracks: list[Track]) -> None:
@@ -82,29 +91,33 @@ def _open_video(
     input_path: Path, output_dir: Path
 ) -> tuple[cv.VideoCapture, cv.VideoWriter, float]:
     capture = cv.VideoCapture(str(input_path))
-    if not capture.isOpened():
-        raise OSError(f"Cannot open video: {input_path}")
-    fps = capture.get(cv.CAP_PROP_FPS)
-    if not isfinite(fps) or fps <= 0:
-        capture.release()
-        raise ValueError("Video must have a positive FPS")
+    writer: cv.VideoWriter | None = None
+    try:
+        if not capture.isOpened():
+            raise OSError(f"Cannot open video: {input_path}")
+        fps = capture.get(cv.CAP_PROP_FPS)
+        if not isfinite(fps) or fps <= 0:
+            raise ValueError("Video must have a positive FPS")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    video_path = output_dir / "annotated.mp4"
-    summary_path = output_dir / "summary.json"
-    if video_path.exists() or summary_path.exists():
-        capture.release()
-        raise FileExistsError(f"Output directory already contains results: {output_dir}")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        video_path = output_dir / "annotated.mp4"
+        summary_path = output_dir / "summary.json"
+        if video_path.exists() or summary_path.exists():
+            raise FileExistsError(f"Output directory already contains results: {output_dir}")
 
-    size = (
-        int(capture.get(cv.CAP_PROP_FRAME_WIDTH)),
-        int(capture.get(cv.CAP_PROP_FRAME_HEIGHT)),
-    )
-    writer = cv.VideoWriter(str(video_path), cv.VideoWriter.fourcc(*"mp4v"), fps, size)
-    if not writer.isOpened():
+        size = (
+            int(capture.get(cv.CAP_PROP_FRAME_WIDTH)),
+            int(capture.get(cv.CAP_PROP_FRAME_HEIGHT)),
+        )
+        writer = cv.VideoWriter(str(video_path), cv.VideoWriter.fourcc(*"mp4v"), fps, size)
+        if not writer.isOpened():
+            raise OSError(f"Cannot write video in: {output_dir}")
+        return capture, writer, fps
+    except Exception:
         capture.release()
-        raise OSError(f"Cannot write video in: {output_dir}")
-    return capture, writer, fps
+        if writer is not None:
+            writer.release()
+        raise
 
 
 def process_video(
@@ -145,15 +158,14 @@ def process_video(
 
             scheduled = frame_id % detect_every == 0
             if scheduled or lost_track:
-                stage_started = perf_counter()
-                detections = detect_bibs(frame)
-                timings["detection"] += perf_counter() - stage_started
+                detections = detect_bibs(frame, timings)
                 detection_frames.append(frame_id)
                 recovery_runs += int(lost_track and not scheduled)
                 tracker.correct(frame, detections, frame_id)
-            elif frame_id % read_every == 0 and tracker.active_tracks:
+
+            if frame_id % read_every == 0 and tracker.active_tracks:
                 stage_started = perf_counter()
-                tracker.read(frame, detector.get_detector(DIGIT_MODEL))
+                tracker.read(frame, detector.get_detector(DIGIT_MODEL), frame_id)
                 timings["digit_reading"] += perf_counter() - stage_started
 
             stage_started = perf_counter()
