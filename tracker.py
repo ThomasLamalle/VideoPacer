@@ -35,9 +35,7 @@ def _find_points(gray: cv.typing.MatLike, bbox: BBox) -> np.ndarray:
     right, bottom = min(image_width, x + width), min(image_height, y + height)
     mask = np.zeros(gray.shape, dtype=np.uint8)
     mask[top:bottom, left:right] = 255
-    points = cv.goodFeaturesToTrack(
-        gray, maxCorners=50, qualityLevel=0.01, minDistance=3, mask=mask
-    )
+    points = cv.goodFeaturesToTrack(gray, maxCorners=50, qualityLevel=0.01, minDistance=3, mask=mask)
     return points if points is not None else np.empty((0, 1, 2), dtype=np.float32)
 
 
@@ -69,9 +67,7 @@ def _move_track(
     if returned is None or backward_status is None:
         return None
     error = np.linalg.norm(track.points - returned, axis=2).ravel()
-    valid = (
-        (forward_status.ravel() == 1) & (backward_status.ravel() == 1) & (error < MAX_FLOW_ERROR)
-    )
+    valid = (forward_status.ravel() == 1) & (backward_status.ravel() == 1) & (error < MAX_FLOW_ERROR)
     if valid.sum() < MIN_POINTS:
         return None
     old_points = track.points[valid].reshape(-1, 2)
@@ -131,6 +127,11 @@ class Tracker:
             self.previous_gray = gray
             return False
 
+        # TODO : Do we really want to mark a track as lost if it is not detected in a frame? It could be occluded for a
+        #  few frames and then reappear. Maybe we should only mark it as lost if it is not detected for N frames in a
+        # row. What is even the purpose/advantage of knowing that a track is lost?
+        # => Knowing a track is lost lets us run bib detection immediately instead of waiting up to 100 frames.
+        # This can recover the runner's bib and start a new track, reducing missing visibility time.
         lost = False
         for track in self.active_tracks:
             moved = _move_track(self.previous_gray, gray, track)
@@ -156,11 +157,12 @@ class Tracker:
             candidates = [
                 track
                 for track in self.active_tracks
-                if track.track_id not in used_tracks
-                and _iou(track.bbox, detection.bbox) >= MATCH_IOU
+                if track.track_id not in used_tracks and _iou(track.bbox, detection.bbox) >= MATCH_IOU
             ]
             if candidates:
                 track = max(candidates, key=lambda item: _iou(item.bbox, detection.bbox))
+                # avoid recomputing the IoU for the same track twice, since we compute it above already
+                # TODO: Use Hungarian algorithm for better matching
             elif detection.confidence >= NEW_TRACK_CONFIDENCE:
                 track = Track(
                     len(self.tracks),
@@ -178,8 +180,8 @@ class Tracker:
             track.points = _find_points(gray, detection.bbox)
             track.last_frame = frame_id
             track.last_detection_frame = frame_id
-            if detection.number is not None:
-                track.votes[detection.number] += 1
+            if detection.bib_string is not None:
+                track.votes[detection.bib_string] += 1
             used_tracks.add(track.track_id)
 
     def read(self, frame: cv.typing.MatLike, reader: DetectorLike, frame_id: int) -> None:
@@ -187,9 +189,9 @@ class Tracker:
         for track in self.active_tracks:
             if track.last_detection_frame == frame_id:
                 continue
-            number = read_bib(frame, track.bbox, reader)
-            if number is not None:
-                track.votes[number] += 1
+            bib_string = read_bib(frame, track.bbox, reader)
+            if bib_string is not None:
+                track.votes[bib_string] += 1
 
     def results(self, fps: float) -> list[TrackResult]:
         """Return the final bib and visible times for every track."""

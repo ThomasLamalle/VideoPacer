@@ -53,7 +53,7 @@ def test_bib_is_detected_on_frame(frame_file: Path, expected_bib: str) -> None:
     assert frame is not None, f"Could not read frame {frame_file}"
 
     detections = detect_bibs(frame)
-    detected_bibs = {detection.number for detection in detections if detection.number is not None}
+    detected_bibs = {detection.bib_string for detection in detections if detection.bib_string is not None}
 
     assert expected_bib in detected_bibs, (
         f"Expected bib {expected_bib} on {frame_file.name}, but detected {sorted(detected_bibs)}"

@@ -20,7 +20,7 @@ class Detection:
 @frozen
 class BibDetection:
     bbox: BBox
-    number: str | None
+    bib_string: str | None
     confidence: float
 
 
@@ -60,9 +60,7 @@ class Detector:
                 score = float(raw_detection[5 + class_id])
                 if score <= confidence:
                     continue
-                center_x, center_y, box_width, box_height = (
-                    raw_detection[:4] * image_scale
-                ).astype(int)
+                center_x, center_y, box_width, box_height = (raw_detection[:4] * image_scale).astype(int)
                 boxes.append(
                     [
                         int(center_x - box_width / 2),
@@ -75,10 +73,7 @@ class Detector:
                 class_ids.append(class_id)
 
         kept = np.asarray(cv.dnn.NMSBoxes(boxes, scores, confidence, 0.4)).flatten()
-        return [
-            Detection(self.classes[class_ids[index]], tuple(boxes[index]), scores[index])
-            for index in kept
-        ]
+        return [Detection(self.classes[class_ids[index]], tuple(boxes[index]), scores[index]) for index in kept]
 
 
 @cache
@@ -88,7 +83,7 @@ def get_detector(config: DetectorConfig) -> Detector:
 
 
 def read_bib(image: cv.typing.MatLike, bbox: BBox, reader: DetectorLike) -> str | None:
-    """Return the digits inside a bib box, or None when none can be read."""
+    """Return the string inside a bib box, or None when none can be read."""
     x, y, width, height = (int(value) for value in bbox)
     image_height, image_width = image.shape[:2]
     left, top = max(0, x), max(0, y)
@@ -96,11 +91,11 @@ def read_bib(image: cv.typing.MatLike, bbox: BBox, reader: DetectorLike) -> str 
     if right <= left or bottom <= top:
         return None
 
-    digits = reader.detect(image[top:bottom, left:right], 0.5)
-    if not digits:
+    bib_string = reader.detect(image[top:bottom, left:right], 0.5)
+    if not bib_string:
         return None
-    digits.sort(key=lambda digit: digit.bbox[0])
-    return "".join(digit.class_name for digit in digits)
+    bib_string.sort(key=lambda digit: digit.bbox[0])
+    return "".join(digit.class_name for digit in bib_string)
 
 
 def find_bibs(image: cv.typing.MatLike, config: DetectorConfig) -> list[Detection]:
@@ -117,9 +112,7 @@ def read_bibs(
     if not boxes:
         return []
     reader = get_detector(digit_config)
-    return [
-        BibDetection(box.bbox, read_bib(image, box.bbox, reader), box.confidence) for box in boxes
-    ]
+    return [BibDetection(box.bbox, read_bib(image, box.bbox, reader), box.confidence) for box in boxes]
 
 
 def detect_bibs(

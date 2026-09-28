@@ -26,7 +26,7 @@ addopts = "-ra"
 
 [tool.ruff]
 target-version = "py314"
-line-length = 100
+line-length = 120
 src = ["."]
 # Scratch script for trying a hosted inference API; not part of the pipeline
 # (it needs an optional dependency and a network/API key to run).
