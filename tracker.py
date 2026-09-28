@@ -9,7 +9,7 @@ import cv2 as cv
 import numpy as np
 from attrs import define, field
 
-from detector import BBox, BibDetection, DetectorLike, read_bib
+from detector import BIB_PATTERN, BBox, BibDetection, DetectorLike, read_bib
 
 MIN_POINTS = 6
 MAX_FLOW_ERROR = 1.5
@@ -111,7 +111,13 @@ class Track:
 
 
 class Tracker:
-    def __init__(self) -> None:
+    def __init__(self, bib_pattern: str = BIB_PATTERN) -> None:
+        """Follow bib boxes between detector frames and collect their readings.
+
+        ``bib_pattern`` is the regex a reading must match to count as a bib number; it
+        is applied whenever the tracker reads a bib itself.
+        """
+        self.bib_pattern = bib_pattern
         self.previous_gray: cv.typing.MatLike | None = None
         self.tracks: list[Track] = []
 
@@ -148,9 +154,10 @@ class Tracker:
     ) -> None:
         """Match detector boxes to active tracks and start a track for the rest.
 
-        Every box the bib detector located starts a track, including one whose
-        digits could not be read, so a runner still gets tracked while its bib
-        number stays unknown. Detector confidence does not gate new tracks.
+        Only a box with a bib number starts a track. A box whose digits could not be
+        read, or read as something that is not a bib number, still moves an existing
+        track but starts none of its own, so junk boxes add no tracks. Detector
+        confidence does not gate new tracks.
         """
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
         used_tracks: set[int] = set()
@@ -164,6 +171,8 @@ class Tracker:
                 track = max(candidates, key=lambda item: _iou(item.bbox, detection.bbox))
                 # avoid recomputing the IoU for the same track twice, since we compute it above already
                 # TODO: Use Hungarian algorithm for better matching
+            elif detection.bib_string is None:
+                continue
             else:
                 track = Track(
                     len(self.tracks),
@@ -188,7 +197,7 @@ class Tracker:
         for track in self.active_tracks:
             if track.last_detection_frame == frame_id:
                 continue
-            bib_string = read_bib(frame, track.bbox, reader)
+            bib_string = read_bib(frame, track.bbox, reader, self.bib_pattern)
             if bib_string is not None:
                 track.votes[bib_string] += 1
 

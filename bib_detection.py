@@ -13,6 +13,7 @@ First 150 frames:
 
 import argparse
 import json
+import re
 from math import isfinite
 from pathlib import Path
 from time import perf_counter
@@ -61,6 +62,7 @@ class Summary(TypedDict):
     detect_every: int
     read_every: int
     input_size: int
+    bib_pattern: str
     detection_runs: int
     detection_frames: list[int]
     tracks: list[TrackResult]
@@ -68,7 +70,10 @@ class Summary(TypedDict):
 
 
 def detect_bibs(
-    frame: cv.typing.MatLike, model: detector.DetectorConfig, timings: Timings | None = None
+    frame: cv.typing.MatLike,
+    model: detector.DetectorConfig,
+    timings: Timings | None = None,
+    bib_pattern: str = detector.BIB_PATTERN,
 ) -> list[BibDetection]:
     """Find bib boxes and read their numbers in one video frame."""
     started = perf_counter()
@@ -77,7 +82,7 @@ def detect_bibs(
         timings["detection"] += perf_counter() - started
 
     started = perf_counter()
-    bibs = detector.read_bibs(frame, boxes, DIGIT_MODEL)
+    bibs = detector.read_bibs(frame, boxes, DIGIT_MODEL, bib_pattern)
     if timings is not None:
         timings["digit_reading"] += perf_counter() - started
     return bibs
@@ -142,6 +147,7 @@ def process_video(  # noqa: PLR0913, PLR0917
     read_every: int = 10,
     max_frames: int | None = None,
     input_size: int = BIB_INPUT_SIZE,
+    bib_pattern: str = detector.BIB_PATTERN,
 ) -> Summary:
     """Track bibs through input_path and write an annotated video and summary.
 
@@ -149,10 +155,15 @@ def process_video(  # noqa: PLR0913, PLR0917
     by optical flow, so the interval only decides how often a fresh bib box is
     located for a runner the tracker does not have yet. ``input_size`` sets the
     square size frames are squashed to for the locator; larger finds small bibs
-    earlier and costs quadratically.
+    earlier and costs quadratically. ``bib_pattern`` is the regex a reading must
+    match to count as a bib number; a box that reads no bib number starts no track.
     """
     if detect_every < 1 or read_every < 1 or (max_frames is not None and max_frames < 1):
         raise ValueError("frame intervals and max_frames must be positive")
+    try:
+        re.compile(bib_pattern)
+    except re.error as error:
+        raise ValueError(f"invalid bib pattern: {bib_pattern!r}") from error
     bib_model = evolve(BIB_MODEL, input_size=input_size)
 
     started = perf_counter()
@@ -166,7 +177,7 @@ def process_video(  # noqa: PLR0913, PLR0917
     }
     processed_frames = 0
     detection_frames: list[int] = []
-    tracker = Tracker()
+    tracker = Tracker(bib_pattern)
 
     try:
         while max_frames is None or processed_frames < max_frames:
@@ -181,7 +192,7 @@ def process_video(  # noqa: PLR0913, PLR0917
 
             scheduled = frame_id % detect_every == 0
             if scheduled:
-                detections = detect_bibs(frame, bib_model, timings)
+                detections = detect_bibs(frame, bib_model, timings, bib_pattern)
                 detection_frames.append(frame_id)
                 tracker.correct(frame, detections, frame_id)
 
@@ -207,6 +218,7 @@ def process_video(  # noqa: PLR0913, PLR0917
         "detect_every": detect_every,
         "read_every": read_every,
         "input_size": input_size,
+        "bib_pattern": bib_pattern,
         "detection_runs": len(detection_frames),
         "detection_frames": detection_frames,
         "tracks": tracker.results(fps),
@@ -230,6 +242,11 @@ def main() -> None:
         default=BIB_INPUT_SIZE,
         help="Square size frames are squashed to for the locator (default: %(default)s)",
     )
+    parser.add_argument(
+        "--bib-pattern",
+        default=detector.BIB_PATTERN,
+        help="Regex a digit reading must match to count as a bib number (default: %(default)s)",
+    )
     args = parser.parse_args()
     process_video(
         args.input,
@@ -238,6 +255,7 @@ def main() -> None:
         args.read_every,
         args.max_frames,
         args.input_size,
+        args.bib_pattern,
     )
 
 

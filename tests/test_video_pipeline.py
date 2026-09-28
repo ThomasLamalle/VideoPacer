@@ -37,7 +37,7 @@ def test_detects_on_schedule_and_writes_every_frame(tmp_path, monkeypatch):
     make_video(source)
     scans = []
 
-    def detect(_frame, _model, _timings=None):
+    def detect(_frame, _model, _timings=None, _bib_pattern=None):
         scans.append(len(scans))
         return [BibDetection((10, 10, 40, 20), "0012", 0.9)]
 
@@ -56,7 +56,7 @@ def test_detects_on_schedule_and_writes_every_frame(tmp_path, monkeypatch):
 def test_detects_only_on_schedule(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
     make_video(source, frames=25)
-    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame, _model, _timings=None: [])
+    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame, _model, _timings=None, _bib_pattern=None: [])
 
     summary = bib_detection.process_video(source, tmp_path / "out", detect_every=10)
 
@@ -69,7 +69,7 @@ def test_an_active_track_does_not_change_the_schedule(tmp_path, monkeypatch):
     monkeypatch.setattr(
         bib_detection,
         "detect_bibs",
-        lambda _frame, _model, _timings=None: [BibDetection((10, 10, 40, 20), "12", 0.9)],
+        lambda _frame, _model, _timings=None, _bib_pattern=None: [BibDetection((10, 10, 40, 20), "12", 0.9)],
     )
 
     summary = bib_detection.process_video(source, tmp_path / "out", detect_every=10)
@@ -80,7 +80,7 @@ def test_an_active_track_does_not_change_the_schedule(tmp_path, monkeypatch):
 def test_summary_contains_simple_stage_timings(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
     make_video(source, frames=2)
-    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame, _model, _timings=None: [])
+    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame, _model, _timings=None, _bib_pattern=None: [])
 
     summary = bib_detection.process_video(source, tmp_path / "out")
 
@@ -102,7 +102,7 @@ def test_summary_contains_simple_stage_timings(tmp_path, monkeypatch):
 def test_max_frames_limits_the_output(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
     make_video(source, frames=7)
-    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame, _model, _timings=None: [])
+    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame, _model, _timings=None, _bib_pattern=None: [])
 
     summary = bib_detection.process_video(source, tmp_path / "out", max_frames=3)
 
@@ -112,24 +112,48 @@ def test_max_frames_limits_the_output(tmp_path, monkeypatch):
 
 def test_reads_a_surviving_track_that_detection_misses(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
-    make_video(source, frames=3)
+    make_video(source, frames=2)
     scans = 0
 
-    def detect(_frame, _model, _timings=None):
+    def detect(_frame, _model, _timings=None, _bib_pattern=None):
         nonlocal scans
         scans += 1
-        return [BibDetection((10, 10, 40, 20), None, 0.9)] if scans == 1 else []
+        return [BibDetection((10, 10, 40, 20), "0012", 0.9)] if scans == 1 else []
 
     class Reader:
         def detect(self, _image, _confidence):
-            return [bib_detection.detector.Detection("12", (0, 0, 1, 1), 0.9)]
+            digits = ("0", "0", "1", "2")
+            return [
+                bib_detection.detector.Detection(digit, (index, 0, 1, 1), 0.9) for index, digit in enumerate(digits)
+            ]
 
     monkeypatch.setattr(bib_detection, "detect_bibs", detect)
     monkeypatch.setattr(bib_detection.detector, "get_detector", lambda _config: Reader())
 
     summary = bib_detection.process_video(source, tmp_path / "out", detect_every=1, read_every=1)
 
-    assert summary["tracks"][0]["votes"] == {"12": 2}
+    assert summary["tracks"][0]["votes"] == {"0012": 2}
+
+
+def test_pipeline_applies_the_configured_bib_pattern(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    make_video(source, frames=2)
+    monkeypatch.setattr(
+        bib_detection,
+        "detect_bibs",
+        lambda _frame, _model, _timings=None, _bib_pattern=None: [BibDetection((10, 10, 40, 20), "0012", 0.9)],
+    )
+
+    class Reader:
+        def detect(self, _image, _confidence):
+            return [bib_detection.detector.Detection("A", (0, 0, 1, 1), 0.9)]
+
+    monkeypatch.setattr(bib_detection.detector, "get_detector", lambda _config: Reader())
+
+    summary = bib_detection.process_video(source, tmp_path / "out", detect_every=2, read_every=1, bib_pattern="[A-Z]")
+
+    assert summary["bib_pattern"] == "[A-Z]"
+    assert summary["tracks"][0]["votes"] == {"0012": 1, "A": 1}
 
 
 def test_setup_error_releases_the_open_capture(tmp_path, monkeypatch):
@@ -164,7 +188,7 @@ def test_detector_ocr_has_its_own_timing(tmp_path, monkeypatch):
         lambda _frame, _config: [bib_detection.detector.Detection("bib", (10, 10, 40, 20), 0.9)],
     )
 
-    def read_bibs(_frame, _boxes, _config):
+    def read_bibs(_frame, _boxes, _config, _bib_pattern=None):
         sleep(0.002)
         return [BibDetection((10, 10, 40, 20), "12", 0.9)]
 

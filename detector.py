@@ -1,5 +1,6 @@
 """Detect bib boxes and read the digits inside them."""
 
+import re
 from functools import cache
 from typing import Protocol
 
@@ -100,9 +101,29 @@ def get_detector(config: DetectorConfig) -> Detector:
 # different number from frame to frame, because the digits fill the whole crop.
 DIGIT_CROP_MARGIN = 0.5
 
+# A race bib number has a fixed shape. A reading that does not look like a bib number is a
+# fragment of a partly visible bib or a couple of stray digits, so it is not treated as a
+# bib number. The pattern is a regex matched against the whole reading, so a race whose
+# bibs mix digits and letters only needs the pattern changed, e.g. r"[A-Z0-9]{4,5}".
+BIB_PATTERN = r"\d{4,5}"
 
-def read_bib(image: cv.typing.MatLike, bbox: BBox, reader: DetectorLike) -> str | None:
-    """Return the digits inside a bib box, or None when none can be read."""
+
+def _matches_bib_pattern(bib_string: str, bib_pattern: str) -> bool:
+    """Return whether a reading looks like a bib number."""
+    return re.fullmatch(bib_pattern, bib_string) is not None
+
+
+def read_bib(
+    image: cv.typing.MatLike,
+    bbox: BBox,
+    reader: DetectorLike,
+    bib_pattern: str = BIB_PATTERN,
+) -> str | None:
+    """Return the digits inside a bib box, or None when none can be read.
+
+    A reading that does not match ``bib_pattern`` reads as None, so it counts as an
+    attempt that found nothing and casts no vote for a bib number.
+    """
     x, y, width, height = (int(value) for value in bbox)
     image_height, image_width = image.shape[:2]
     margin = int(height * DIGIT_CROP_MARGIN)
@@ -111,11 +132,14 @@ def read_bib(image: cv.typing.MatLike, bbox: BBox, reader: DetectorLike) -> str 
     if right <= left or bottom <= top:
         return None
 
-    bib_string = reader.detect(image[top:bottom, left:right], 0.5)
-    if not bib_string:
+    digits = reader.detect(image[top:bottom, left:right], 0.5)
+    if not digits:
         return None
-    bib_string.sort(key=lambda digit: digit.bbox[0])
-    return "".join(digit.class_name for digit in bib_string)
+    digits.sort(key=lambda digit: digit.bbox[0])
+    bib_string = "".join(digit.class_name for digit in digits)
+    if not _matches_bib_pattern(bib_string, bib_pattern):
+        return None
+    return bib_string
 
 
 def find_bibs(image: cv.typing.MatLike, config: DetectorConfig) -> list[Detection]:
@@ -127,18 +151,24 @@ def read_bibs(
     image: cv.typing.MatLike,
     boxes: list[Detection],
     digit_config: DetectorConfig,
+    bib_pattern: str = BIB_PATTERN,
 ) -> list[BibDetection]:
-    """Read the number inside each detected bib box."""
+    """Read the number inside each detected bib box.
+
+    Boxes whose digits cannot be read, or read as something that is not a bib number,
+    keep their box with a None ``bib_string``.
+    """
     if not boxes:
         return []
     reader = get_detector(digit_config)
-    return [BibDetection(box.bbox, read_bib(image, box.bbox, reader), box.confidence) for box in boxes]
+    return [BibDetection(box.bbox, read_bib(image, box.bbox, reader, bib_pattern), box.confidence) for box in boxes]
 
 
 def detect_bibs(
     image: cv.typing.MatLike,
     bib_config: DetectorConfig,
     digit_config: DetectorConfig,
+    bib_pattern: str = BIB_PATTERN,
 ) -> list[BibDetection]:
     """Return the bib boxes and numbers found in one image."""
-    return read_bibs(image, find_bibs(image, bib_config), digit_config)
+    return read_bibs(image, find_bibs(image, bib_config), digit_config, bib_pattern)

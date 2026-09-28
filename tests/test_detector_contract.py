@@ -53,16 +53,44 @@ def test_detector_squashes_frames_to_the_configured_input_size(monkeypatch):
     assert sizes == [(832, 832)]
 
 
-@pytest.mark.parametrize("digits, expected", [(["0", "0", "7"], "007"), ([], None)])
-def test_read_bib_preserves_zeroes_and_unreadable_bibs(digits, expected):
-    class Reader:
-        def detect(self, _crop, _threshold):
-            return [detector.Detection(number, (index * 3, 0, 2, 8), 0.9) for index, number in enumerate(digits)]
+class DigitsReader:
+    """A stand-in digit reader that returns these digits from left to right."""
 
-    reader = Reader()
+    def __init__(self, *digits: str) -> None:
+        self.digits = digits
+
+    def detect(self, _image: cv.typing.MatLike, _confidence: float) -> list[detector.Detection]:
+        return [detector.Detection(digit, (index * 3, 0, 2, 8), 0.9) for index, digit in enumerate(self.digits)]
+
+
+@pytest.mark.parametrize("digits, expected", [(["0", "0", "0", "7"], "0007"), ([], None)])
+def test_read_bib_preserves_zeroes_and_unreadable_bibs(digits, expected):
     image = np.zeros((20, 20, 3), dtype=np.uint8)
 
-    assert detector.read_bib(image, (-5, -5, 15, 15), reader) == expected
+    assert detector.read_bib(image, (-5, -5, 15, 15), DigitsReader(*digits)) == expected
+
+
+@pytest.mark.parametrize(
+    "digits, expected",
+    [
+        (["1", "2", "3"], None),
+        (["1", "2", "3", "4"], "1234"),
+        (["1", "2", "3", "4", "5"], "12345"),
+        (["1", "2", "3", "4", "5", "6"], None),
+    ],
+)
+def test_read_bib_keeps_only_readings_that_match_the_bib_pattern(digits, expected):
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    assert detector.read_bib(image, (-5, -5, 15, 15), DigitsReader(*digits)) == expected
+
+
+def test_read_bib_accepts_a_configured_bib_pattern():
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    reader = DigitsReader("A", "1", "2", "3")
+
+    assert detector.read_bib(image, (-5, -5, 15, 15), reader, bib_pattern=r"[A-Z]\d{3}") == "A123"
 
 
 def test_detect_bibs_retains_an_unreadable_box(monkeypatch):
