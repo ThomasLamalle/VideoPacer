@@ -54,7 +54,7 @@ def test_unreadable_detection_still_moves_an_existing_track():
     tracker.correct(frame(22), [BibDetection((22, 20, 35, 20), None, 0.1)], 1)
 
     assert len(tracker.tracks) == 1
-    assert tracker.tracks[0].votes == {"0012": 1}
+    assert tracker.tracks[0].votes == {"0012": pytest.approx(0.9)}
     assert tracker.tracks[0].last_detection_frame == 1
 
 
@@ -67,8 +67,27 @@ def test_detection_updates_an_existing_track_and_its_votes():
     tracker.correct(frame(22), [BibDetection((22, 20, 35, 20), "0012", 0.2)], 1)
 
     assert len(tracker.tracks) == 1
-    assert tracker.tracks[0].votes == {"0012": 2}
+    assert tracker.tracks[0].votes == {"0012": pytest.approx(1.1)}
     assert tracker.tracks[0].last_detection_frame == 1
+
+
+def test_votes_are_weighted_by_reading_confidence():
+    tracker = Tracker()
+    tracker.follow(frame(), 0)
+    tracker.correct(frame(), [BibDetection((20, 20, 35, 20), "0012", 1.0)], 0)
+
+    class Reader:
+        def detect(self, _crop, _confidence):
+            return [Detection("0013", (0, 0, 2, 8), 0.3)]
+
+    reader = Reader()
+    for frame_id in (1, 2, 3):
+        tracker.follow(frame(22), frame_id)
+        tracker.read(frame(22), reader, frame_id)
+
+    track = tracker.tracks[0]
+    assert track.votes["0013"] == pytest.approx(0.9)
+    assert track.best_bib == "0012"
 
 
 def test_votes_report_ties_and_conflicts():
@@ -86,9 +105,9 @@ def test_votes_report_ties_and_conflicts():
     tracker.read(frame(22), reader, 1)
 
     track = tracker.tracks[0]
-    assert track.best_bib is None
+    assert track.best_bib == "0012"
     assert track.conflicting
-    assert track.votes == {"0012": 1, "0013": 1}
+    assert track.votes == {"0012": pytest.approx(0.9), "0013": pytest.approx(0.9)}
 
 
 def test_a_reading_that_does_not_match_the_bib_pattern_does_not_vote():
@@ -103,7 +122,7 @@ def test_a_reading_that_does_not_match_the_bib_pattern_does_not_vote():
     tracker.follow(frame(22), 1)
     tracker.read(frame(22), Reader(), 1)
 
-    assert tracker.tracks[0].votes == {"0012": 1}
+    assert tracker.tracks[0].votes == {"0012": pytest.approx(0.9)}
 
 
 def test_a_tracker_can_be_told_another_bib_pattern():
@@ -118,7 +137,7 @@ def test_a_tracker_can_be_told_another_bib_pattern():
     tracker.follow(frame(22), 1)
     tracker.read(frame(22), Reader(), 1)
 
-    assert tracker.tracks[0].votes == {"12": 1, "34": 1}
+    assert tracker.tracks[0].votes == {"12": pytest.approx(0.9), "34": pytest.approx(0.9)}
 
 
 def test_results_include_best_bib_and_visible_times():
@@ -131,7 +150,7 @@ def test_results_include_best_bib_and_visible_times():
         {
             "track_id": 0,
             "best_bib": "007",
-            "votes": {"007": 1},
+            "votes": {"007": pytest.approx(0.9)},
             "conflicting": False,
             "first_frame": 0,
             "last_frame": 1,

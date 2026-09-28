@@ -132,7 +132,7 @@ def test_reads_a_surviving_track_that_detection_misses(tmp_path, monkeypatch):
 
     summary = bib_detection.process_video(source, tmp_path / "out", detect_every=1, read_every=1)
 
-    assert summary["tracks"][0]["votes"] == {"0012": 2}
+    assert summary["tracks"][0]["votes"] == {"0012": pytest.approx(1.8)}
 
 
 def test_pipeline_applies_the_configured_bib_pattern(tmp_path, monkeypatch):
@@ -153,7 +153,7 @@ def test_pipeline_applies_the_configured_bib_pattern(tmp_path, monkeypatch):
     summary = bib_detection.process_video(source, tmp_path / "out", detect_every=2, read_every=1, bib_pattern="[A-Z]")
 
     assert summary["bib_pattern"] == "[A-Z]"
-    assert summary["tracks"][0]["votes"] == {"0012": 1, "A": 1}
+    assert summary["tracks"][0]["votes"] == {"0012": pytest.approx(0.9), "A": pytest.approx(0.9)}
 
 
 def test_setup_error_releases_the_open_capture(tmp_path, monkeypatch):

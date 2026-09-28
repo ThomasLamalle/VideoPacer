@@ -19,7 +19,24 @@ class Detection:
 
 
 @frozen
+class BibReading:
+    """A bib number read from a box and how sure the digit reader was.
+
+    ``confidence`` is the mean of the per-digit scores, so a confident reading casts a
+    heavier vote than an unsure one.
+    """
+
+    bib_string: str
+    confidence: float
+
+
+@frozen
 class BibDetection:
+    """A bib box and the number read inside it.
+
+    An unreadable box keeps its place with a None ``bib_string`` and zero confidence.
+    """
+
     bbox: BBox
     bib_string: str | None
     confidence: float
@@ -118,11 +135,12 @@ def read_bib(
     bbox: BBox,
     reader: DetectorLike,
     bib_pattern: str = BIB_PATTERN,
-) -> str | None:
+) -> BibReading | None:
     """Return the digits inside a bib box, or None when none can be read.
 
-    A reading that does not match ``bib_pattern`` reads as None, so it counts as an
-    attempt that found nothing and casts no vote for a bib number.
+    ``confidence`` is the mean score of the digits read. A reading that does not match
+    ``bib_pattern`` reads as None, so it counts as an attempt that found nothing and
+    casts no vote for a bib number.
     """
     x, y, width, height = (int(value) for value in bbox)
     image_height, image_width = image.shape[:2]
@@ -139,7 +157,8 @@ def read_bib(
     bib_string = "".join(digit.class_name for digit in digits)
     if not _matches_bib_pattern(bib_string, bib_pattern):
         return None
-    return bib_string
+    confidence = sum(digit.confidence for digit in digits) / len(digits)
+    return BibReading(bib_string, confidence)
 
 
 def find_bibs(image: cv.typing.MatLike, config: DetectorConfig) -> list[Detection]:
@@ -161,7 +180,15 @@ def read_bibs(
     if not boxes:
         return []
     reader = get_detector(digit_config)
-    return [BibDetection(box.bbox, read_bib(image, box.bbox, reader, bib_pattern), box.confidence) for box in boxes]
+    results = []
+    for box in boxes:
+        reading = read_bib(image, box.bbox, reader, bib_pattern)
+        results.append(
+            BibDetection(box.bbox, reading.bib_string, reading.confidence)
+            if reading is not None
+            else BibDetection(box.bbox, None, 0.0)
+        )
+    return results
 
 
 def detect_bibs(

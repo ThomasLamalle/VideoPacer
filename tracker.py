@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from typing import TypedDict
 
 import cv2 as cv
@@ -19,7 +18,7 @@ MATCH_IOU = 0.3
 class TrackResult(TypedDict):
     track_id: int
     best_bib: str | None
-    votes: dict[str, int]
+    votes: dict[str, float]
     conflicting: bool
     first_frame: int
     last_frame: int
@@ -94,16 +93,19 @@ class Track:
     first_frame: int
     last_frame: int
     last_detection_frame: int
-    votes: Counter[str] = field(factory=Counter)
+    votes: dict[str, float] = field(factory=dict)
     active: bool = True
 
     @property
     def best_bib(self) -> str | None:
-        """Return the leading bib reading, or None when there is a tie."""
-        leaders = self.votes.most_common(2)
-        if not leaders or (len(leaders) > 1 and leaders[0][1] == leaders[1][1]):
+        """Return the reading with the most confidence behind it.
+
+        Votes are weighted by reading confidence, so a clear reading beats repeated
+        unsure ones. A tie returns the reading seen first, in vote order.
+        """
+        if not self.votes:
             return None
-        return leaders[0][0]
+        return max(self.votes, key=self.votes.__getitem__)
 
     @property
     def conflicting(self) -> bool:
@@ -189,7 +191,7 @@ class Tracker:
             track.last_frame = frame_id
             track.last_detection_frame = frame_id
             if detection.bib_string is not None:
-                track.votes[detection.bib_string] += 1
+                track.votes[detection.bib_string] = track.votes.get(detection.bib_string, 0.0) + detection.confidence
             used_tracks.add(track.track_id)
 
     def read(self, frame: cv.typing.MatLike, reader: DetectorLike, frame_id: int) -> None:
@@ -197,9 +199,9 @@ class Tracker:
         for track in self.active_tracks:
             if track.last_detection_frame == frame_id:
                 continue
-            bib_string = read_bib(frame, track.bbox, reader, self.bib_pattern)
-            if bib_string is not None:
-                track.votes[bib_string] += 1
+            reading = read_bib(frame, track.bbox, reader, self.bib_pattern)
+            if reading is not None:
+                track.votes[reading.bib_string] = track.votes.get(reading.bib_string, 0.0) + reading.confidence
 
     def results(self, fps: float) -> list[TrackResult]:
         """Return the final bib and visible times for every track."""

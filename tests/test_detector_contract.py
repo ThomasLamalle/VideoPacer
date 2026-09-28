@@ -63,7 +63,13 @@ class DigitsReader:
         return [detector.Detection(digit, (index * 3, 0, 2, 8), 0.9) for index, digit in enumerate(self.digits)]
 
 
-@pytest.mark.parametrize("digits, expected", [(["0", "0", "0", "7"], "0007"), ([], None)])
+@pytest.mark.parametrize(
+    "digits, expected",
+    [
+        (["0", "0", "0", "7"], detector.BibReading("0007", 0.9)),
+        ([], None),
+    ],
+)
 def test_read_bib_preserves_zeroes_and_unreadable_bibs(digits, expected):
     image = np.zeros((20, 20, 3), dtype=np.uint8)
 
@@ -74,8 +80,8 @@ def test_read_bib_preserves_zeroes_and_unreadable_bibs(digits, expected):
     "digits, expected",
     [
         (["1", "2", "3"], None),
-        (["1", "2", "3", "4"], "1234"),
-        (["1", "2", "3", "4", "5"], "12345"),
+        (["1", "2", "3", "4"], detector.BibReading("1234", 0.9)),
+        (["1", "2", "3", "4", "5"], detector.BibReading("12345", 0.9)),
         (["1", "2", "3", "4", "5", "6"], None),
     ],
 )
@@ -85,12 +91,31 @@ def test_read_bib_keeps_only_readings_that_match_the_bib_pattern(digits, expecte
     assert detector.read_bib(image, (-5, -5, 15, 15), DigitsReader(*digits)) == expected
 
 
+def test_read_bib_confidence_is_the_mean_of_the_digit_scores():
+    class Reader:
+        def detect(self, _image, _confidence):
+            return [
+                detector.Detection("1", (0, 0, 2, 8), 1.0),
+                detector.Detection("2", (3, 0, 2, 8), 0.5),
+                detector.Detection("3", (6, 0, 2, 8), 0.0),
+                detector.Detection("4", (9, 0, 2, 8), 0.5),
+            ]
+
+    reading = detector.read_bib(np.zeros((20, 20, 3), dtype=np.uint8), (-5, -5, 15, 15), Reader())
+
+    assert reading is not None
+    assert reading.bib_string == "1234"
+    assert reading.confidence == pytest.approx(0.5)
+
+
 def test_read_bib_accepts_a_configured_bib_pattern():
     image = np.zeros((20, 20, 3), dtype=np.uint8)
 
     reader = DigitsReader("A", "1", "2", "3")
 
-    assert detector.read_bib(image, (-5, -5, 15, 15), reader, bib_pattern=r"[A-Z]\d{3}") == "A123"
+    assert detector.read_bib(image, (-5, -5, 15, 15), reader, bib_pattern=r"[A-Z]\d{3}") == detector.BibReading(
+        "A123", 0.9
+    )
 
 
 def test_detect_bibs_retains_an_unreadable_box(monkeypatch):
@@ -102,7 +127,7 @@ def test_detect_bibs_retains_an_unreadable_box(monkeypatch):
 
     result = detector.detect_bibs(np.zeros((20, 20, 3), dtype=np.uint8), config, config)
 
-    assert result == [detector.BibDetection((2, 3, 10, 8), None, 0.8)]
+    assert result == [detector.BibDetection((2, 3, 10, 8), None, 0.0)]
 
 
 def test_read_bib_does_not_send_an_empty_crop_to_the_model():
