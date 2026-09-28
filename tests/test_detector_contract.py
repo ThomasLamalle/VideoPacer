@@ -13,6 +13,7 @@ import detector
 def test_detector_keeps_confidence():
     model = object.__new__(detector.Detector)
     model.classes = ("bib",)
+    model.input_size = 416
     model.layer_names = ["out"]
     model.net = cast(
         cv.dnn.Net,
@@ -26,6 +27,30 @@ def test_detector_keeps_confidence():
 
     assert result[0].bbox == (30, 40, 40, 20)
     assert result[0].confidence == pytest.approx(0.2)
+
+
+def test_detector_squashes_frames_to_the_configured_input_size(monkeypatch):
+    sizes = []
+    monkeypatch.setattr(
+        cv.dnn,
+        "blobFromImage",
+        lambda _image, _scale, size, **_kwargs: sizes.append(size) or np.zeros((1, 3, 416, 416)),
+    )
+    model = object.__new__(detector.Detector)
+    model.classes = ("bib",)
+    model.input_size = 832
+    model.layer_names = ["out"]
+    model.net = cast(
+        cv.dnn.Net,
+        SimpleNamespace(
+            setInput=lambda _blob: None,
+            forward=lambda _names: [np.array([[0.5, 0.5, 0.4, 0.2, 1.0, 0.2]])],
+        ),
+    )
+
+    model.detect(np.zeros((100, 100, 3), dtype=np.uint8), 0.1)
+
+    assert sizes == [(832, 832)]
 
 
 @pytest.mark.parametrize("digits, expected", [(["0", "0", "7"], "007"), ([], None)])

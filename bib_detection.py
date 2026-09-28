@@ -19,6 +19,7 @@ from time import perf_counter
 from typing import TypedDict
 
 import cv2 as cv
+from attrs import evolve
 from loguru import logger
 
 import detector
@@ -26,10 +27,17 @@ from detector import BibDetection
 from tracker import Track, Tracker, TrackResult
 
 ROOT = Path(__file__).resolve().parent
+# The locator cfg declares a 416x416 input and keeps its anchors in absolute pixels
+# for that input, so squashing 1920x1080 down to 416 leaves a bib at ~14x18 px, below
+# the smallest anchor either head can match. Running the same weights at 832 puts a
+# bib at ~28x36 px and locates runners up to 7.5s earlier. Recall peaks between 768
+# and 896 and falls off on both sides, so this is a plateau and not a lucky value.
+BIB_INPUT_SIZE = 832
 BIB_MODEL = detector.DetectorConfig(
     str(ROOT / "bibobj/RBNR_custom-yolov4-tiny-detector.cfg"),
     str(ROOT / "bibobj/RBNR_custom-yolov4-tiny-detector_best.weights"),
     ("bib",),
+    input_size=BIB_INPUT_SIZE,
 )
 DIGIT_MODEL = detector.DetectorConfig(
     str(ROOT / "bibobj/SVHN_custom-yolov4-tiny-detector.cfg"),
@@ -52,16 +60,19 @@ class Summary(TypedDict):
     processed_frames: int
     detect_every: int
     read_every: int
+    input_size: int
     detection_runs: int
     detection_frames: list[int]
     tracks: list[TrackResult]
     seconds: Timings
 
 
-def detect_bibs(frame: cv.typing.MatLike, timings: Timings | None = None) -> list[BibDetection]:
+def detect_bibs(
+    frame: cv.typing.MatLike, model: detector.DetectorConfig, timings: Timings | None = None
+) -> list[BibDetection]:
     """Find bib boxes and read their numbers in one video frame."""
     started = perf_counter()
-    boxes = detector.find_bibs(frame, BIB_MODEL)
+    boxes = detector.find_bibs(frame, model)
     if timings is not None:
         timings["detection"] += perf_counter() - started
 
@@ -122,21 +133,27 @@ def _open_video(input_path: Path, output_dir: Path) -> tuple[cv.VideoCapture, cv
         raise
 
 
-def process_video(
+# The run options are independent knobs rather than parts of one object yet; a model
+# registry will absorb them (see features_todo.md).
+def process_video(  # noqa: PLR0913, PLR0917
     input_path: Path,
     output_dir: Path,
     detect_every: int = 20,
     read_every: int = 10,
     max_frames: int | None = None,
+    input_size: int = BIB_INPUT_SIZE,
 ) -> Summary:
     """Track bibs through input_path and write an annotated video and summary.
 
     Detection runs on every ``detect_every`` frame. Every frame is still followed
     by optical flow, so the interval only decides how often a fresh bib box is
-    located for a runner the tracker does not have yet.
+    located for a runner the tracker does not have yet. ``input_size`` sets the
+    square size frames are squashed to for the locator; larger finds small bibs
+    earlier and costs quadratically.
     """
     if detect_every < 1 or read_every < 1 or (max_frames is not None and max_frames < 1):
         raise ValueError("frame intervals and max_frames must be positive")
+    bib_model = evolve(BIB_MODEL, input_size=input_size)
 
     started = perf_counter()
     capture, writer, fps = _open_video(input_path, output_dir)
@@ -164,7 +181,7 @@ def process_video(
 
             scheduled = frame_id % detect_every == 0
             if scheduled:
-                detections = detect_bibs(frame, timings)
+                detections = detect_bibs(frame, bib_model, timings)
                 detection_frames.append(frame_id)
                 tracker.correct(frame, detections, frame_id)
 
@@ -189,6 +206,7 @@ def process_video(
         "processed_frames": processed_frames,
         "detect_every": detect_every,
         "read_every": read_every,
+        "input_size": input_size,
         "detection_runs": len(detection_frames),
         "detection_frames": detection_frames,
         "tracks": tracker.results(fps),
@@ -206,6 +224,12 @@ def main() -> None:
     parser.add_argument("--detect-every", type=int, default=20)
     parser.add_argument("--read-every", type=int, default=10)
     parser.add_argument("--max-frames", type=int)
+    parser.add_argument(
+        "--input-size",
+        type=int,
+        default=BIB_INPUT_SIZE,
+        help="Square size frames are squashed to for the locator (default: %(default)s)",
+    )
     args = parser.parse_args()
     process_video(
         args.input,
@@ -213,6 +237,7 @@ def main() -> None:
         args.detect_every,
         args.read_every,
         args.max_frames,
+        args.input_size,
     )
 
 

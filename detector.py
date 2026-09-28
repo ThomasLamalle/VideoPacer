@@ -26,9 +26,19 @@ class BibDetection:
 
 @frozen
 class DetectorConfig:
+    """Darknet model files, class names and the network input size to run at.
+
+    ``input_size`` is the square size every frame is squashed to before inference.
+    It can differ from the ``width``/``height`` declared in the cfg, but the anchors
+    stay absolute pixel sizes, so raising it rescales the objects the network sees.
+    A cfg trained at 416 hands its smallest anchor to objects that shrink far below
+    it once a widescreen frame is squashed, and those objects match no anchor at all.
+    """
+
     cfg: str
     weights: str
     classes: tuple[str, ...]
+    input_size: int = 416
 
 
 class DetectorLike(Protocol):
@@ -38,6 +48,7 @@ class DetectorLike(Protocol):
 class Detector:
     def __init__(self, config: DetectorConfig) -> None:
         self.classes = config.classes
+        self.input_size = config.input_size
         self.net = cv.dnn.readNetFromDarknet(config.cfg, config.weights)
         self.net.setPreferableBackend(cv.dnn.DNN_BACKEND_OPENCV)
         names = self.net.getLayerNames()
@@ -45,7 +56,8 @@ class Detector:
 
     def detect(self, image: cv.typing.MatLike, confidence: float) -> list[Detection]:
         """Return model detections in image coordinates."""
-        blob = cv.dnn.blobFromImage(image, 1 / 255.0, (416, 416), swapRB=True, crop=False)
+        size = (self.input_size, self.input_size)
+        blob = cv.dnn.blobFromImage(image, 1 / 255.0, size, swapRB=True, crop=False)
         self.net.setInput(blob)
         outputs = self.net.forward(self.layer_names)
         height, width = image.shape[:2]
@@ -82,12 +94,20 @@ def get_detector(config: DetectorConfig) -> Detector:
     return Detector(config)
 
 
+# The digit model was trained on SVHN crops, where a digit fills roughly two thirds
+# of its 32x32 window. A bib box is tight around the digits, so the crop is grown by
+# this fraction of the box height before reading. Without it the same bib reads as a
+# different number from frame to frame, because the digits fill the whole crop.
+DIGIT_CROP_MARGIN = 0.5
+
+
 def read_bib(image: cv.typing.MatLike, bbox: BBox, reader: DetectorLike) -> str | None:
-    """Return the string inside a bib box, or None when none can be read."""
+    """Return the digits inside a bib box, or None when none can be read."""
     x, y, width, height = (int(value) for value in bbox)
     image_height, image_width = image.shape[:2]
-    left, top = max(0, x), max(0, y)
-    right, bottom = min(image_width, x + width), min(image_height, y + height)
+    margin = int(height * DIGIT_CROP_MARGIN)
+    left, top = max(0, x - margin), max(0, y - margin)
+    right, bottom = min(image_width, x + width + margin), min(image_height, y + height + margin)
     if right <= left or bottom <= top:
         return None
 
