@@ -5,9 +5,11 @@ The first target is a small race that accepts approximate finish results. Proces
 List of features to implement. Increasing numbers does not mean features depends on each other, assume independance first.
 X features needs brainstorming or analyze before consideration
 
+- Make detection, optical flow or reading in separate colors so I know when a detection occured, when a read occured or when both occured
+
 - Separate bib detection and bib reading clearly and use a registry pattern with a dict to easily change processing (we'll switch from yolo to RF-DETR and possibly change the digit reading too)
 
-- Investigate why bibs are not detected/read so late in the video : the bibs are detected or read at least 5s after the runner is in the frame
+- Investigate why bibs are detected (or read ?) so late in the video : the bibs are detected or read at least 5s after the runner is in the frame
 
 - Restore track identity or merge track with same bib string if 1) last detection is less than X=10s ago 2) atleast 3 votes on each
 
