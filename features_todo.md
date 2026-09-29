@@ -6,19 +6,14 @@ X features needs brainstorming or analyze before consideration
 
 # Features to implement
 
-- Display the vote count ( max 2 leaders) near the bounding boxes
-
-- Add regression/golden tests against full video and ground truth but without video saving
-
-- Separate bib detection and bib reading clearly and use a registry pattern with a dict to easily change processing (we'll switch from yolo to RF-DETR and possibly change the digit reading too)
-
-
 - Restore track identity or merge track with same bib string if 1) last detection is less than X=10s ago 2) atleast 3 votes on each
 
 - Feature 1: Reduce actual work before parallelizing: frame differencing/motion detection to skip near-duplicate frames
 
 - Feature 2: Experiment with batching frames through the detector. Verify model/backend support and measure throughput, memory use, and waiting time to fill a batch. Higher throughput alone does not guarantee low live latency.
+
 - Feature 3: multiprocessing.Pool instead of threading for the CPU-bound parts (this sidesteps the GIL question entirely, and gives real multi-core parallelism). Cost: each process needs its own model loaded into memory (or GPU memory), so 4 processes = 4x model memory. Fine for a small YOLO/Detectron2 model, less fine if it's huge.
+
 - Feature 4 :ThreadPoolExecutor with 4 workers as a quick experiment — measure the benefit on this pipeline and ensure concurrent calls do not mutate the same detector instance unsafely.
 
 
@@ -29,7 +24,6 @@ X features needs brainstorming or analyze before consideration
 
 - Feature 6 (depends on 5): Preserve partial and conflicting readings and combine evidence within a track. Define supported bib string patterns and retain unknown digits rather than guessing a complete number.
 
-- take into account reading score when counting vote
 - Use number of frame between readings when counting vote : time spaced readings have more chance to be right that consecutives frames reading
 
 - Feature 7 (depends on 5): Add reversible locking to reduce repeated digit reading after sufficient agreement. Reopen a decision when stronger contradictory evidence appears or track identity becomes uncertain. Repeated similar frames must not be treated as independent proof of correctness.
@@ -85,3 +79,8 @@ Keep performance measurement and improvements active alongside recognition and r
 - Make detection, optical flow or reading in separate colors so I know when a detection occured, when a read occured or when both occured
 
 - In the votes, take make it such that larger numbers are preferred over smaller, i.e. one 5 digits vote should have X=5 times more weight against any number of 4 digits vote (very low propability of reading an non existing extra digit)
+
+- Display the vote count ( max 2 leaders) near the bounding boxes => not so good visually
+
+- Add regression/golden tests against full video and ground truth but without video saving
+- Separate bib detection and bib reading clearly and use a registry pattern with a dict to easily change processing (we'll switch from yolo to RF-DETR and possibly change the digit reading too)
