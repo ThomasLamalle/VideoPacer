@@ -51,12 +51,16 @@ class DetectorConfig:
     stay absolute pixel sizes, so raising it rescales the objects the network sees.
     A cfg trained at 416 hands its smallest anchor to objects that shrink far below
     it once a widescreen frame is squashed, and those objects match no anchor at all.
+
+    ``confidence`` is the score below which a detection is dropped. It belongs to the
+    model, not the pipeline: a different backend needs its own threshold.
     """
 
     cfg: str
     weights: str
     classes: tuple[str, ...]
     input_size: int = 416
+    confidence: float = 0.1
 
 
 class DetectorLike(Protocol):
@@ -124,6 +128,9 @@ DIGIT_CROP_MARGIN = 0.5
 # bibs mix digits and letters only needs the pattern changed, e.g. r"[A-Z0-9]{4,5}".
 BIB_PATTERN = r"\d{4,5}"
 
+# The digit reader's own detection threshold, for the same reason as DetectorConfig.confidence.
+DIGIT_THRESHOLD = 0.5
+
 
 def read_bib(
     image: cv.typing.MatLike,
@@ -145,7 +152,7 @@ def read_bib(
     if right <= left or bottom <= top:
         return None
 
-    digits = reader.detect(image[top:bottom, left:right], 0.5)
+    digits = reader.detect(image[top:bottom, left:right], DIGIT_THRESHOLD)
     if not digits:
         return None
     digits.sort(key=lambda digit: digit.bbox[0])
@@ -158,7 +165,7 @@ def read_bib(
 
 def find_bibs(image: cv.typing.MatLike, config: DetectorConfig) -> list[Detection]:
     """Find bib boxes in one video frame."""
-    return get_detector(config).detect(image, 0.1)
+    return get_detector(config).detect(image, config.confidence)
 
 
 def read_bibs(
@@ -166,6 +173,7 @@ def read_bibs(
     boxes: list[Detection],
     digit_config: DetectorConfig,
     bib_pattern: str = BIB_PATTERN,
+    digit_reader: str = "yolo",
 ) -> list[BibDetection]:
     """Read the number inside each detected bib box.
 
@@ -175,12 +183,19 @@ def read_bibs(
     if not boxes:
         return []
     reader = get_detector(digit_config)
+    read_crop = BIB_READERS[digit_reader]
     results = []
     for box in boxes:
-        reading = read_bib(image, box.bbox, reader, bib_pattern)
+        reading = read_crop(image, box.bbox, reader, bib_pattern)
         results.append(
             BibDetection(box.bbox, reading.bib_string, reading.confidence)
             if reading is not None
             else BibDetection(box.bbox, None, 0.0)
         )
     return results
+
+
+# Swap implementations here: a detector takes (image, config), a reader takes
+# (image, bbox, digit_reader, bib_pattern). Add an entry and pass its name to RunConfig.
+BIB_DETECTORS = {"yolo": find_bibs}
+BIB_READERS = {"yolo": read_bib}

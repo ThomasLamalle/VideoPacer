@@ -6,7 +6,7 @@ X features needs brainstorming or analyze before consideration
 
 # Features to implement
 
-- Make detection, optical flow or reading in separate colors so I know when a detection occured, when a read occured or when both occured
+- Add regression/golden tests against full video and ground truth but without video saving
 
 - Separate bib detection and bib reading clearly and use a registry pattern with a dict to easily change processing (we'll switch from yolo to RF-DETR and possibly change the digit reading too)
 
@@ -79,3 +79,5 @@ Keep performance measurement and improvements active alongside recognition and r
 
 
 - Investigate why bibs are detected (or read ?) so late in the video : the bibs are detected or read at least 5s after the runner is in the frame => It was the downscaling of the image. 832 pixels seems to right tradeoff
+
+- Make detection, optical flow or reading in separate colors so I know when a detection occured, when a read occured or when both occured

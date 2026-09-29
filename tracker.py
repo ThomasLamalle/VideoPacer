@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TypedDict
 
 import cv2 as cv
 import numpy as np
 from attrs import define, field
 
-from detector import BIB_PATTERN, BBox, BibDetection, DetectorLike, read_bib
+from detector import BIB_PATTERN, BIB_READERS, BBox, BibDetection, BibReading, DetectorLike
 
 MIN_POINTS = 6
 MAX_FLOW_ERROR = 1.5
@@ -114,13 +115,18 @@ class Track:
 
 
 class Tracker:
-    def __init__(self, bib_pattern: str = BIB_PATTERN) -> None:
+    def __init__(
+        self,
+        bib_pattern: str = BIB_PATTERN,
+        reader_fn: Callable[[cv.typing.MatLike, BBox, DetectorLike, str], BibReading | None] | None = None,
+    ) -> None:
         """Follow bib boxes between detector frames and collect their readings.
 
         ``bib_pattern`` is the regex a reading must match to count as a bib number; it
         is applied whenever the tracker reads a bib itself.
         """
         self.bib_pattern = bib_pattern
+        self.reader_fn = reader_fn or BIB_READERS["yolo"]
         self.previous_gray: cv.typing.MatLike | None = None
         self.tracks: list[Track] = []
 
@@ -201,7 +207,7 @@ class Tracker:
         for track in self.active_tracks:
             if track.last_detection_frame == frame_id:
                 continue
-            reading = read_bib(frame, track.bbox, reader, self.bib_pattern)
+            reading = self.reader_fn(frame, track.bbox, reader, self.bib_pattern)
             if reading is not None:
                 track.votes[reading.bib_string] = track.votes.get(reading.bib_string, 0.0) + reading.confidence
                 track.last_read_frame = frame_id

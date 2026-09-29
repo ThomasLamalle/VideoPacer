@@ -17,7 +17,7 @@ from pathlib import Path
 import cv2 as cv
 import pytest
 
-from bib_detection import BIB_MODEL, detect_bibs
+from bib_detection import BIB_MODEL, RunConfig, detect_bibs
 
 FRAMES_DIR = Path(__file__).resolve().parent / "frames"
 
@@ -52,7 +52,7 @@ def test_bib_is_detected_on_frame(frame_file: Path, expected_bib: str) -> None:
     frame = cv.imread(str(frame_file))
     assert frame is not None, f"Could not read frame {frame_file}"
 
-    detections = detect_bibs(frame, BIB_MODEL)
+    detections = detect_bibs(frame, BIB_MODEL, RunConfig())
     detected_bibs = {detection.bib_string for detection in detections if detection.bib_string is not None}
 
     assert expected_bib in detected_bibs, (

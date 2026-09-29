@@ -40,9 +40,12 @@ Each run creates:
 
 ## Code
 
-- `detector.py` detects bib boxes and reads their digits.
+- `detector.py` detects bib boxes and reads their digits. Bib-box detection and digit
+  reading are separate registries, `BIB_DETECTORS` and `BIB_READERS`; add an entry and
+  pass its name via `--bib-detector` / `--digit-reader` to swap a backend.
 - `tracker.py` follows boxes and stores bib votes.
 - `bib_detection.py` reads the video, calls detection/tracking and writes results.
+  `RunConfig` holds the schedule, locator tuning, bib pattern and chosen implementations.
 
 The main loop is:
 

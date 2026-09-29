@@ -22,7 +22,7 @@ from time import perf_counter
 from typing import TypedDict
 
 import cv2 as cv
-from attrs import evolve
+from attrs import evolve, frozen
 
 import detector
 from detector import BibDetection
@@ -36,17 +36,51 @@ logger = logging.getLogger(__name__)
 # bib at ~28x36 px and locates runners up to 7.5s earlier. Recall peaks between 768
 # and 896 and falls off on both sides, so this is a plateau and not a lucky value.
 BIB_INPUT_SIZE = 832
+BIB_CONFIDENCE = 0.1
 BIB_MODEL = detector.DetectorConfig(
     str(ROOT / "bibobj/RBNR_custom-yolov4-tiny-detector.cfg"),
     str(ROOT / "bibobj/RBNR_custom-yolov4-tiny-detector_best.weights"),
     ("bib",),
     input_size=BIB_INPUT_SIZE,
+    confidence=BIB_CONFIDENCE,
 )
 DIGIT_MODEL = detector.DetectorConfig(
     str(ROOT / "bibobj/SVHN_custom-yolov4-tiny-detector.cfg"),
     str(ROOT / "bibobj/SVHN_custom-yolov4-tiny-detector_best.weights"),
     tuple(str(number) for number in range(10)),
 )
+BIB_DETECTOR = "yolo"
+DIGIT_READER = "yolo"
+
+
+@frozen
+class RunConfig:
+    """One run's knobs: schedule, locator tuning, bib pattern and implementations.
+
+    ``bib_detector`` and ``digit_reader`` name entries in ``detector.BIB_DETECTORS`` and
+    ``detector.BIB_READERS``, so switching a backend is a registry entry plus a name here.
+    """
+
+    detect_every: int = 20
+    read_every: int = 10
+    max_frames: int | None = None
+    input_size: int = BIB_INPUT_SIZE
+    confidence: float = BIB_CONFIDENCE
+    bib_pattern: str = detector.BIB_PATTERN
+    bib_detector: str = BIB_DETECTOR
+    digit_reader: str = DIGIT_READER
+
+    def __attrs_post_init__(self) -> None:
+        if self.detect_every < 1 or self.read_every < 1 or (self.max_frames is not None and self.max_frames < 1):
+            raise ValueError("frame intervals and max_frames must be positive")
+        try:
+            re.compile(self.bib_pattern)
+        except re.error as error:
+            raise ValueError(f"invalid bib pattern: {self.bib_pattern!r}") from error
+        if self.bib_detector not in detector.BIB_DETECTORS:
+            raise ValueError(f"unknown bib detector: {self.bib_detector!r}")
+        if self.digit_reader not in detector.BIB_READERS:
+            raise ValueError(f"unknown digit reader: {self.digit_reader!r}")
 
 
 class Timings(TypedDict):
@@ -64,7 +98,10 @@ class Summary(TypedDict):
     detect_every: int
     read_every: int
     input_size: int
+    confidence: float
     bib_pattern: str
+    bib_detector: str
+    digit_reader: str
     detection_frames: list[int]
     tracks: list[TrackResult]
     seconds: Timings
@@ -73,17 +110,17 @@ class Summary(TypedDict):
 def detect_bibs(
     frame: cv.typing.MatLike,
     model: detector.DetectorConfig,
+    config: RunConfig,
     timings: Timings | None = None,
-    bib_pattern: str = detector.BIB_PATTERN,
 ) -> list[BibDetection]:
     """Find bib boxes and read their numbers in one video frame."""
     started = perf_counter()
-    boxes = detector.find_bibs(frame, model)
+    boxes = detector.BIB_DETECTORS[config.bib_detector](frame, model)
     if timings is not None:
         timings["detection"] += perf_counter() - started
 
     started = perf_counter()
-    bibs = detector.read_bibs(frame, boxes, DIGIT_MODEL, bib_pattern)
+    bibs = detector.read_bibs(frame, boxes, DIGIT_MODEL, config.bib_pattern, config.digit_reader)
     if timings is not None:
         timings["digit_reading"] += perf_counter() - started
     return bibs
@@ -142,33 +179,20 @@ def _open_video(input_path: Path, output_dir: Path) -> tuple[cv.VideoCapture, cv
         raise
 
 
-# The run options are independent knobs rather than parts of one object yet; a model
-# registry will absorb them (see features_todo.md).
-def process_video(  # noqa: PLR0913, PLR0917
+def process_video(
     input_path: Path,
     output_dir: Path,
-    detect_every: int = 20,
-    read_every: int = 10,
-    max_frames: int | None = None,
-    input_size: int = BIB_INPUT_SIZE,
-    bib_pattern: str = detector.BIB_PATTERN,
+    config: RunConfig | None = None,
 ) -> Summary:
     """Track bibs through input_path and write an annotated video and summary.
 
-    Detection runs on every ``detect_every`` frame. Every frame is still followed
-    by optical flow, so the interval only decides how often a fresh bib box is
-    located for a runner the tracker does not have yet. ``input_size`` sets the
-    square size frames are squashed to for the locator; larger finds small bibs
-    earlier and costs quadratically. ``bib_pattern`` is the regex a reading must
-    match to count as a bib number; a box that reads no bib number starts no track.
+    Detection runs on every ``config.detect_every`` frame. Every frame is still followed
+    by optical flow, so the interval only decides how often a fresh bib box is located
+    for a runner the tracker does not have yet. ``config`` also holds the locator tuning,
+    the bib pattern, and the detector and reader implementations to use.
     """
-    if detect_every < 1 or read_every < 1 or (max_frames is not None and max_frames < 1):
-        raise ValueError("frame intervals and max_frames must be positive")
-    try:
-        re.compile(bib_pattern)
-    except re.error as error:
-        raise ValueError(f"invalid bib pattern: {bib_pattern!r}") from error
-    bib_model = evolve(BIB_MODEL, input_size=input_size)
+    config = config or RunConfig()
+    bib_model = evolve(BIB_MODEL, input_size=config.input_size, confidence=config.confidence)
 
     started = perf_counter()
     capture, writer, fps = _open_video(input_path, output_dir)
@@ -181,10 +205,10 @@ def process_video(  # noqa: PLR0913, PLR0917
     }
     processed_frames = 0
     detection_frames: list[int] = []
-    tracker = Tracker(bib_pattern)
+    tracker = Tracker(config.bib_pattern, detector.BIB_READERS[config.digit_reader])
 
     try:
-        while max_frames is None or processed_frames < max_frames:
+        while config.max_frames is None or processed_frames < config.max_frames:
             ok, frame = capture.read()
             if not ok:
                 break
@@ -194,13 +218,13 @@ def process_video(  # noqa: PLR0913, PLR0917
             tracker.follow(frame, frame_id)
             timings["optical_flow"] += perf_counter() - stage_started
 
-            scheduled = frame_id % detect_every == 0
+            scheduled = frame_id % config.detect_every == 0
             if scheduled:
-                detections = detect_bibs(frame, bib_model, timings, bib_pattern)
+                detections = detect_bibs(frame, bib_model, config, timings)
                 detection_frames.append(frame_id)
                 tracker.correct(frame, detections, frame_id)
 
-            if frame_id % read_every == 0 and tracker.active_tracks:
+            if frame_id % config.read_every == 0 and tracker.active_tracks:
                 stage_started = perf_counter()
                 tracker.read(frame, detector.get_detector(DIGIT_MODEL), frame_id)
                 timings["digit_reading"] += perf_counter() - stage_started
@@ -219,10 +243,13 @@ def process_video(  # noqa: PLR0913, PLR0917
         "input": str(input_path.resolve()),
         "fps": fps,
         "processed_frames": processed_frames,
-        "detect_every": detect_every,
-        "read_every": read_every,
-        "input_size": input_size,
-        "bib_pattern": bib_pattern,
+        "detect_every": config.detect_every,
+        "read_every": config.read_every,
+        "input_size": config.input_size,
+        "confidence": config.confidence,
+        "bib_pattern": config.bib_pattern,
+        "bib_detector": config.bib_detector,
+        "digit_reader": config.digit_reader,
         "detection_frames": detection_frames,
         "tracks": tracker.results(fps),
         "seconds": timings,
@@ -246,9 +273,27 @@ def main() -> None:
         help="Square size frames are squashed to for the locator (default: %(default)s)",
     )
     parser.add_argument(
+        "--confidence",
+        type=float,
+        default=BIB_CONFIDENCE,
+        help="Score below which a bib detection is dropped (default: %(default)s)",
+    )
+    parser.add_argument(
         "--bib-pattern",
         default=detector.BIB_PATTERN,
         help="Regex a digit reading must match to count as a bib number (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--bib-detector",
+        choices=sorted(detector.BIB_DETECTORS),
+        default=BIB_DETECTOR,
+        help="Bib box detector to use (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--digit-reader",
+        choices=sorted(detector.BIB_READERS),
+        default=DIGIT_READER,
+        help="Digit reader to use (default: %(default)s)",
     )
     args = parser.parse_args()
     output_dir = args.output_dir or ROOT / "runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -256,11 +301,16 @@ def main() -> None:
     process_video(
         args.input,
         output_dir,
-        args.detect_every,
-        args.read_every,
-        args.max_frames,
-        args.input_size,
-        args.bib_pattern,
+        RunConfig(
+            detect_every=args.detect_every,
+            read_every=args.read_every,
+            max_frames=args.max_frames,
+            input_size=args.input_size,
+            confidence=args.confidence,
+            bib_pattern=args.bib_pattern,
+            bib_detector=args.bib_detector,
+            digit_reader=args.digit_reader,
+        ),
     )
 
 
