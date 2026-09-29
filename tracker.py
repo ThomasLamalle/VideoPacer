@@ -102,16 +102,20 @@ class Track:
     def best_bib(self) -> str | None:
         """Return the reading with the most confidence behind it.
 
-        Votes are weighted by reading confidence, so a clear reading beats repeated
-        unsure ones. A tie returns the reading seen first, in vote order.
+        Prefer the longest reading, then its accumulated confidence. A tie returns
+        the reading seen first, in vote order.
         """
         if not self.votes:
             return None
-        return max(self.votes, key=self.votes.__getitem__)
+        return max(self.votes, key=lambda bib: (len(bib), self.votes[bib]))
 
     @property
     def conflicting(self) -> bool:
         return len(self.votes) > 1
+
+    def add_vote(self, bib: str, confidence: float) -> None:
+        """Accumulate confidence for one reading."""
+        self.votes[bib] = self.votes.get(bib, 0.0) + confidence
 
 
 class Tracker:
@@ -198,7 +202,7 @@ class Tracker:
             track.last_frame = frame_id
             track.last_detection_frame = frame_id
             if detection.bib_string is not None:
-                track.votes[detection.bib_string] = track.votes.get(detection.bib_string, 0.0) + detection.confidence
+                track.add_vote(detection.bib_string, detection.confidence)
                 track.last_read_frame = frame_id
             used_tracks.add(track.track_id)
 
@@ -209,7 +213,7 @@ class Tracker:
                 continue
             reading = self.reader_fn(frame, track.bbox, reader, self.bib_pattern)
             if reading is not None:
-                track.votes[reading.bib_string] = track.votes.get(reading.bib_string, 0.0) + reading.confidence
+                track.add_vote(reading.bib_string, reading.confidence)
                 track.last_read_frame = frame_id
 
     def results(self, fps: float) -> list[TrackResult]:

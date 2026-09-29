@@ -11,6 +11,7 @@ First 150 frames:
     uv run python bib_detection.py --max-frames 150 --output-dir runs/short
 """
 
+import csv
 import json
 import logging
 import re
@@ -182,6 +183,20 @@ def _open_video(input_path: Path, output_dir: Path | None) -> tuple[cv.VideoCapt
         raise
 
 
+def log_ground_truth(input_path: Path, tracks: list[TrackResult]) -> None:
+    """Compare detected bibs with a ground_truth.csv beside the input video, if present."""
+    truth_path = input_path.parent / "ground_truth.csv"
+    if not truth_path.is_file():
+        return
+    with truth_path.open(newline="", encoding="utf-8") as file:
+        expected = {row["bib"] for row in csv.DictReader(file)}
+    found = {track["best_bib"] for track in tracks if track["best_bib"]}
+    logger.info("Ground truth: %d/%d bibs found", len(found & expected), len(expected))
+    logger.info("Matched: %s", ", ".join(sorted(found & expected)) or "none")
+    logger.info("Missing: %s", ", ".join(sorted(expected - found)) or "none")
+    logger.info("Extra: %s", ", ".join(sorted(found - expected)) or "none")
+
+
 def process_video(
     input_path: Path,
     output_dir: Path | None,
@@ -262,6 +277,7 @@ def process_video(
     if output_dir is not None:
         (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     logger.info(f"Processed {processed_frames} frames, found {len(tracker.tracks)} tracks in {timings['total']:.2f}s")
+    log_ground_truth(input_path, summary["tracks"])
     return summary
 
 

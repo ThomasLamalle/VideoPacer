@@ -6,7 +6,7 @@ X features needs brainstorming or analyze before consideration
 
 # Features to implement
 
-- In the votes, take make it such that larger numbers are preferred over smaller, i.e. one 5 digits vote should win against any number of 4 digits vote (very low propability of reading an non existing extra digit)
+- Display the vote count ( max 2 leaders) near the bounding boxes
 
 - Add regression/golden tests against full video and ground truth but without video saving
 
@@ -83,3 +83,5 @@ Keep performance measurement and improvements active alongside recognition and r
 - Investigate why bibs are detected (or read ?) so late in the video : the bibs are detected or read at least 5s after the runner is in the frame => It was the downscaling of the image. 832 pixels seems to right tradeoff
 
 - Make detection, optical flow or reading in separate colors so I know when a detection occured, when a read occured or when both occured
+
+- In the votes, take make it such that larger numbers are preferred over smaller, i.e. one 5 digits vote should have X=5 times more weight against any number of 4 digits vote (very low propability of reading an non existing extra digit)

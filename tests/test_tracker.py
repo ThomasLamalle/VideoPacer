@@ -93,6 +93,20 @@ def test_votes_are_weighted_by_reading_confidence():
     assert track.last_read_frame == 3
 
 
+def test_longer_bib_wins_over_any_number_of_shorter_votes():
+    tracker = Tracker()
+    tracker.follow(frame(), 0)
+    tracker.correct(frame(), [BibDetection((20, 20, 35, 20), "1234", 1.0)], 0)
+    track = tracker.tracks[0]
+
+    for _ in range(10):
+        track.add_vote("1234", 1.0)
+    track.add_vote("12345", 0.1)
+
+    assert track.votes == {"1234": pytest.approx(11.0), "12345": pytest.approx(0.1)}
+    assert track.best_bib == "12345"
+
+
 def test_votes_report_ties_and_conflicts():
     tracker = Tracker()
     tracker.follow(frame(), 0)

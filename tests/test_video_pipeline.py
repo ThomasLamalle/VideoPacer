@@ -1,5 +1,6 @@
 """Tests for the direct video-processing loop."""
 
+import logging
 from pathlib import Path
 from time import sleep
 
@@ -70,6 +71,19 @@ def test_detects_on_schedule_and_writes_every_frame(tmp_path, monkeypatch):
     assert summary["tracks"][0]["first_seconds"] == 0
     assert summary["tracks"][0]["last_seconds"] == pytest.approx(0.6)
     assert count_frames(tmp_path / "out/annotated.mp4") == 7
+
+
+def test_no_ground_truth_skips_comparison_and_video(tmp_path, monkeypatch, caplog):
+    source = tmp_path / "source.mp4"
+    make_video(source, frames=2)
+    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame, _model, _config, _timings=None: [])
+
+    with caplog.at_level(logging.INFO):
+        summary = bib_detection.process_video(source, None)
+
+    assert summary["processed_frames"] == 2
+    assert "Ground truth:" not in caplog.text
+    assert list(tmp_path.iterdir()) == [source]
 
 
 def test_detects_only_on_schedule(tmp_path, monkeypatch):
