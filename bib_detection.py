@@ -148,7 +148,7 @@ def draw_tracks(frame: cv.typing.MatLike, tracks: list[Track], frame_id: int) ->
         cv.putText(frame, label, (x, max(20, y - 8)), cv.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
 
-def _open_video(input_path: Path, output_dir: Path) -> tuple[cv.VideoCapture, cv.VideoWriter, float]:
+def _open_video(input_path: Path, output_dir: Path | None) -> tuple[cv.VideoCapture, cv.VideoWriter | None, float]:
     capture = cv.VideoCapture(str(input_path))
     writer: cv.VideoWriter | None = None
     try:
@@ -157,6 +157,9 @@ def _open_video(input_path: Path, output_dir: Path) -> tuple[cv.VideoCapture, cv
         fps = capture.get(cv.CAP_PROP_FPS)
         if not isfinite(fps) or fps <= 0:
             raise ValueError("Video must have a positive FPS")
+
+        if output_dir is None:
+            return capture, None, fps
 
         output_dir.mkdir(parents=True, exist_ok=True)
         video_path = output_dir / "annotated.mp4"
@@ -181,10 +184,10 @@ def _open_video(input_path: Path, output_dir: Path) -> tuple[cv.VideoCapture, cv
 
 def process_video(
     input_path: Path,
-    output_dir: Path,
+    output_dir: Path | None,
     config: RunConfig | None = None,
 ) -> Summary:
-    """Track bibs through input_path and write an annotated video and summary.
+    """Track bibs through input_path; write outputs only when output_dir is set.
 
     Detection runs on every ``config.detect_every`` frame. Every frame is still followed
     by optical flow, so the interval only decides how often a fresh bib box is located
@@ -229,14 +232,16 @@ def process_video(
                 tracker.read(frame, detector.get_detector(DIGIT_MODEL), frame_id)
                 timings["digit_reading"] += perf_counter() - stage_started
 
-            stage_started = perf_counter()
-            draw_tracks(frame, tracker.active_tracks, frame_id)
-            writer.write(frame)
-            timings["video_writing"] += perf_counter() - stage_started
+            if writer is not None:
+                stage_started = perf_counter()
+                draw_tracks(frame, tracker.active_tracks, frame_id)
+                writer.write(frame)
+                timings["video_writing"] += perf_counter() - stage_started
             processed_frames += 1
     finally:
         capture.release()
-        writer.release()
+        if writer is not None:
+            writer.release()
 
     timings["total"] = perf_counter() - started
     summary: Summary = {
@@ -254,7 +259,8 @@ def process_video(
         "tracks": tracker.results(fps),
         "seconds": timings,
     }
-    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    if output_dir is not None:
+        (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     logger.info(f"Processed {processed_frames} frames, found {len(tracker.tracks)} tracks in {timings['total']:.2f}s")
     return summary
 

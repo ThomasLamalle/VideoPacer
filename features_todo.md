@@ -6,6 +6,8 @@ X features needs brainstorming or analyze before consideration
 
 # Features to implement
 
+- In the votes, take make it such that larger numbers are preferred over smaller, i.e. one 5 digits vote should win against any number of 4 digits vote (very low propability of reading an non existing extra digit)
+
 - Add regression/golden tests against full video and ground truth but without video saving
 
 - Separate bib detection and bib reading clearly and use a registry pattern with a dict to easily change processing (we'll switch from yolo to RF-DETR and possibly change the digit reading too)
