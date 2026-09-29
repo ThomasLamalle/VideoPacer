@@ -11,7 +11,6 @@ First 150 frames:
     uv run python bib_detection.py --max-frames 150 --output-dir runs/short
 """
 
-import argparse
 import json
 import logging
 import re
@@ -19,9 +18,10 @@ from datetime import datetime
 from math import isfinite
 from pathlib import Path
 from time import perf_counter
-from typing import TypedDict
+from typing import Annotated, TypedDict
 
 import cv2 as cv
+import typer
 from attrs import evolve, frozen
 
 import detector
@@ -259,61 +259,50 @@ def process_video(
     return summary
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, default=ROOT / "sample1/video.mp4")
-    parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--detect-every", type=int, default=20)
-    parser.add_argument("--read-every", type=int, default=10)
-    parser.add_argument("--max-frames", type=int)
-    parser.add_argument(
-        "--input-size",
-        type=int,
-        default=BIB_INPUT_SIZE,
-        help="Square size frames are squashed to for the locator (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--confidence",
-        type=float,
-        default=BIB_CONFIDENCE,
-        help="Score below which a bib detection is dropped (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--bib-pattern",
-        default=detector.BIB_PATTERN,
-        help="Regex a digit reading must match to count as a bib number (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--bib-detector",
-        choices=sorted(detector.BIB_DETECTORS),
-        default=BIB_DETECTOR,
-        help="Bib box detector to use (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--digit-reader",
-        choices=sorted(detector.BIB_READERS),
-        default=DIGIT_READER,
-        help="Digit reader to use (default: %(default)s)",
-    )
-    args = parser.parse_args()
-    output_dir = args.output_dir or ROOT / "runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+app = typer.Typer(add_completion=False, help=__doc__)
+
+
+@app.command()
+def main(  # noqa: PLR0913, PLR0917 -- a CLI exposes one argument per tunable knob
+    input_path: Annotated[Path, typer.Option("--input", help="Video file to process.")] = ROOT / "sample1/video.mp4",
+    output_dir: Annotated[
+        Path | None, typer.Option(help="Where to write the results (default: runs/<timestamp>).")
+    ] = None,
+    detect_every: Annotated[int, typer.Option(min=1, help="Run the bib detector every N frames.")] = 20,
+    read_every: Annotated[int, typer.Option(min=1, help="Try reading track digits every N frames.")] = 10,
+    max_frames: Annotated[int | None, typer.Option(min=1, help="Stop after this many frames.")] = None,
+    input_size: Annotated[
+        int, typer.Option(help="Square size frames are squashed to for the locator.")
+    ] = BIB_INPUT_SIZE,
+    confidence: Annotated[float, typer.Option(help="Score below which a bib detection is dropped.")] = BIB_CONFIDENCE,
+    bib_pattern: Annotated[
+        str, typer.Option(help="Regex a reading must match to count as a bib number.")
+    ] = detector.BIB_PATTERN,
+    bib_detector: Annotated[
+        str, typer.Option(help=f"Bib box detector to use ({', '.join(sorted(detector.BIB_DETECTORS))}).")
+    ] = BIB_DETECTOR,
+    digit_reader: Annotated[
+        str, typer.Option(help=f"Digit reader to use ({', '.join(sorted(detector.BIB_READERS))}).")
+    ] = DIGIT_READER,
+) -> None:
+    """Run bib detection and tracking on a video."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    output_dir = output_dir or ROOT / "runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     process_video(
-        args.input,
+        input_path,
         output_dir,
         RunConfig(
-            detect_every=args.detect_every,
-            read_every=args.read_every,
-            max_frames=args.max_frames,
-            input_size=args.input_size,
-            confidence=args.confidence,
-            bib_pattern=args.bib_pattern,
-            bib_detector=args.bib_detector,
-            digit_reader=args.digit_reader,
+            detect_every=detect_every,
+            read_every=read_every,
+            max_frames=max_frames,
+            input_size=input_size,
+            confidence=confidence,
+            bib_pattern=bib_pattern,
+            bib_detector=bib_detector,
+            digit_reader=digit_reader,
         ),
     )
 
 
 if __name__ == "__main__":
-    main()
-    #  uv run python bib_detection.py
+    app()
