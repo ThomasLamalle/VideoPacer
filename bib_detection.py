@@ -50,8 +50,8 @@ DIGIT_MODEL = detector.DetectorConfig(
     str(ROOT / "bibobj/SVHN_custom-yolov4-tiny-detector_best.weights"),
     tuple(str(number) for number in range(10)),
 )
-BIB_DETECTOR = "yolo"
-DIGIT_READER = "yolo"
+BIB_DETECTOR = "yolov4"
+DIGIT_READER = "yolov4"
 
 
 @frozen
@@ -265,7 +265,7 @@ def process_video(
         "processed_frames": processed_frames,
         "detect_every": config.detect_every,
         "read_every": config.read_every,
-        "input_size": config.input_size,
+        "input_size": {"roboflow_2.0": 416, "rfdetr-large-t1": 640}.get(config.bib_detector, config.input_size),
         "confidence": config.confidence,
         "bib_pattern": config.bib_pattern,
         "bib_detector": config.bib_detector,
@@ -294,7 +294,7 @@ def main(  # noqa: PLR0913, PLR0917 -- a CLI exposes one argument per tunable kn
     read_every: Annotated[int, typer.Option(min=1, help="Try reading track digits every N frames.")] = 10,
     max_frames: Annotated[int | None, typer.Option(min=1, help="Stop after this many frames.")] = None,
     input_size: Annotated[
-        int, typer.Option(help="Square size frames are squashed to for the locator.")
+        int, typer.Option(help="YOLO input size (Roboflow v5 and RF-DETR use fixed 416/640 inputs).")
     ] = BIB_INPUT_SIZE,
     confidence: Annotated[float, typer.Option(help="Score below which a bib detection is dropped.")] = BIB_CONFIDENCE,
     bib_pattern: Annotated[

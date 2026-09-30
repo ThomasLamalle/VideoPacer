@@ -130,7 +130,7 @@ class Tracker:
         is applied whenever the tracker reads a bib itself.
         """
         self.bib_pattern = bib_pattern
-        self.reader_fn = reader_fn or BIB_READERS["yolo"]
+        self.reader_fn = reader_fn or BIB_READERS["yolov4"]
         self.previous_gray: cv.typing.MatLike | None = None
         self.tracks: list[Track] = []
 

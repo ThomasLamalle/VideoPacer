@@ -19,6 +19,27 @@ uv run python bib_detection.py `
   --output-dir runs/full-video
 ```
 
+Use Roboflow bib-detection/5 for bib boxes (YOLO still reads digits). Set
+`__ROBOFLOW_API_KEY__` in the environment first; no local server is needed:
+
+```bash
+uv run python bib_detection.py --input sample1/video.mp4 --bib-detector roboflow_2.0
+uv run python bib_detection.py --input sample1/video.mp4 --bib-detector rfdetr-large-t1
+uv run python bib_detection.py --input sample1/video.mp4 --bib-detector yolo26n-t1 --input-size 1024 --confidence 0.01
+```
+
+The last two names use `thomas-lamalle/bib-detection` versions 7 (RF-DETR Large)
+and 8 (YOLO26n). The local inference library handles the model's resize and
+maps boxes back to video coordinates. RF-DETR has a fixed 640×640 input; YOLO26n
+supports `--input-size` (832 by default). The YOLO digit reader is unchanged.
+
+Compare all bib detectors on one image, saving overlays and per-model JSON under
+`frame_results_comparison/<timestamp>`:
+
+```bash
+uv run python compare_frame_models.py --image sample1/frame_04.jpg
+```
+
 Process only the first 150 frames:
 
 ```powershell

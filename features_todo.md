@@ -6,6 +6,8 @@ X features needs brainstorming or analyze before consideration
 
 # Features to implement
 
+- REmove static bib detection : very easy way to get rid of false positives
+
 - Restore track identity or merge track with same bib string if 1) last detection is less than X=10s ago 2) atleast 3 votes on each
 
 - Feature 1: Reduce actual work before parallelizing: frame differencing/motion detection to skip near-duplicate frames

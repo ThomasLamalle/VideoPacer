@@ -129,6 +129,36 @@ def test_read_bibs_retains_an_unreadable_box(monkeypatch):
     assert result == [detector.BibDetection((2, 3, 10, 8), None, 0.0)]
 
 
+@pytest.mark.parametrize(
+    "name, model_id",
+    [("roboflow_2.0", "bib-detection/5"), ("rfdetr-large-t1", "bib-detection/7"), ("yolo26n-t1", "bib-detection/8")],
+)
+def test_roboflow_detector_converts_and_filters_boxes(monkeypatch, name, model_id):
+    """Each Roboflow version uses its own resizing and returns video-coordinate boxes."""
+    label = "0" if name == "yolo26n-t1" else "Bib"
+    predictions = [
+        SimpleNamespace(class_name=label, x=30, y=40, width=20, height=10, confidence=0.9),
+        SimpleNamespace(class_name=label, x=30, y=40, width=20, height=10, confidence=0.05),
+    ]
+    called = []
+
+    def load(identifier):
+        def infer(_image, **kwargs):
+            called.append((identifier, kwargs))
+            return [SimpleNamespace(predictions=predictions)]
+
+        return SimpleNamespace(infer=infer)
+
+    monkeypatch.setattr(detector, "get_roboflow_detector", load)
+    config = detector.DetectorConfig("unused", "unused", ("bib",), confidence=0.1)
+
+    assert detector.BIB_DETECTORS[name](np.zeros((80, 80, 3), dtype=np.uint8), config) == [
+        detector.Detection(label, (20, 35, 20, 10), 0.9)
+    ]
+    expected_options = {"image_size": 416} if name == "yolo26n-t1" else {}
+    assert called == [(model_id, {"confidence": 0.1, **expected_options})]
+
+
 def test_read_bib_does_not_send_an_empty_crop_to_the_model():
     class Reader:
         def detect(self, _image, _confidence):

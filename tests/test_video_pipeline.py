@@ -73,6 +73,17 @@ def test_detects_on_schedule_and_writes_every_frame(tmp_path, monkeypatch):
     assert count_frames(tmp_path / "out/annotated.mp4") == 7
 
 
+def test_fixed_roboflow_input_size_is_reported(tmp_path, monkeypatch):
+    """RF-DETR's network size does not change with the YOLO input-size knob."""
+    source = tmp_path / "source.mp4"
+    make_video(source, frames=1)
+    monkeypatch.setattr(bib_detection, "detect_bibs", lambda _frame, _model, _config, _timings=None: [])
+
+    summary = bib_detection.process_video(source, None, RunConfig(bib_detector="rfdetr-large-t1", input_size=832))
+
+    assert summary["input_size"] == 640
+
+
 def test_no_ground_truth_skips_comparison_and_video(tmp_path, monkeypatch, caplog):
     source = tmp_path / "source.mp4"
     make_video(source, frames=2)

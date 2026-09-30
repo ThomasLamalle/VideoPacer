@@ -1,7 +1,8 @@
 """Detect bib boxes and read the digits inside them."""
 
+import os
 import re
-from functools import cache
+from functools import cache, partial
 from typing import Protocol
 
 import cv2 as cv
@@ -168,12 +169,44 @@ def find_bibs(image: cv.typing.MatLike, config: DetectorConfig) -> list[Detectio
     return get_detector(config).detect(image, config.confidence)
 
 
+@cache
+def get_roboflow_detector(model_id: str):
+    """Load and cache a Roboflow model by its version ID."""
+    from inference import get_model  # noqa: PLC0415 -- keep the heavy backend optional for YOLO runs.
+
+    return get_model(model_id, api_key=os.environ["__ROBOFLOW_API_KEY__"])
+
+
+def find_roboflow_bibs(
+    image: cv.typing.MatLike, config: DetectorConfig, model_id: str = "bib-detection/5"
+) -> list[Detection]:
+    """Use model preprocessing and convert its boxes to video coordinates."""
+    options = {"image_size": config.input_size} if model_id == "bib-detection/8" else {}
+    response = get_roboflow_detector(model_id).infer(image, confidence=config.confidence, **options)[0]
+    # Version 8's training labels include bibs as '0' and 'tegnumber' (race number).
+    bib_classes = {"bib", "0", "tegnumber"} if model_id == "bib-detection/8" else {"bib"}
+    return [
+        Detection(
+            prediction.class_name,
+            (
+                prediction.x - prediction.width / 2,
+                prediction.y - prediction.height / 2,
+                prediction.width,
+                prediction.height,
+            ),
+            prediction.confidence,
+        )
+        for prediction in response.predictions
+        if prediction.confidence > config.confidence and prediction.class_name.lower() in bib_classes
+    ]
+
+
 def read_bibs(
     image: cv.typing.MatLike,
     boxes: list[Detection],
     digit_config: DetectorConfig,
     bib_pattern: str = BIB_PATTERN,
-    digit_reader: str = "yolo",
+    digit_reader: str = "yolov4",
 ) -> list[BibDetection]:
     """Read the number inside each detected bib box.
 
@@ -197,5 +230,10 @@ def read_bibs(
 
 # Swap implementations here: a detector takes (image, config), a reader takes
 # (image, bbox, digit_reader, bib_pattern). Add an entry and pass its name to RunConfig.
-BIB_DETECTORS = {"yolo": find_bibs}
-BIB_READERS = {"yolo": read_bib}
+BIB_DETECTORS = {
+    "yolov4": find_bibs,
+    "roboflow_2.0": find_roboflow_bibs,
+    "rfdetr-large-t1": partial(find_roboflow_bibs, model_id="bib-detection/7"),
+    "yolo26n-t1": partial(find_roboflow_bibs, model_id="bib-detection/8"),
+}
+BIB_READERS = {"yolov4": read_bib}
