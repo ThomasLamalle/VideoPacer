@@ -6,9 +6,14 @@ X features needs brainstorming or analyze before consideration
 
 # Features to implement
 
+- Always make a read when making a detection with enough confidence : detection usually means bib is readable !
+
+- Make digit read only : consider that bibs can only be digits. REname bib_string to bib_number etc.
+
+
 - REmove static bib detection : very easy way to get rid of false positives
 
-- Don't only start a track when a bib is readable, start it with a bib detection confidence threshoold
+- Don't only start a track when a bib is readable, start it with a bib detection confidence threshold with ??? when bib number cannot be read. Make track red when no bib is read and green when a bib that matched the pattern has been read.
 
 - Restore track identity or merge track with same bib string if 1) last detection is less than X=10s ago 2) atleast 3 votes on each
 
