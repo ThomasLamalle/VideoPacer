@@ -1,93 +1,53 @@
 # VideoPacer
 
-VideoPacer detects race bibs near a finish line. The current experiment uses
-occasional bib detection and optical flow to follow bibs between detections.
+**Race-bib detection and tracking in finish-line video.** VideoPacer combines periodic bib detection, digit recognition, and optical-flow tracking to follow runners between detector passes. It aggregates repeated readings into a best bib number and exports an annotated video plus machine-readable results.
 
-## Run it
+## Demo
 
-Install the environment:
+![Annotated race-bib detection and tracking demo](sample1/annotated-demo.gif)
 
-```powershell
+Boxes are labeled with a temporary track ID and the current best bib reading. `DETECT` marks a detector update, `READ` a digit-reading update, `FLOW` an optical-flow-only frame, and `BOTH` a frame with both updates. The GIF is a reduced-size preview; the pipeline writes full-resolution MP4 output.
+
+
+## Run
+
+Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/). The sample input video and local Darknet model weights are not included in this repository. Use your own video; the default backend also expects its model files under `bibobj/` (see `bib_detection.py`).
+
+```bash
 uv sync
+uv run python bib_detection.py --input /path/to/video.mp4 --output-dir runs/sample
 ```
 
-Process the complete sample video:
-
-```powershell
-uv run python bib_detection.py `
-  --input sample1/video.mp4 `
-  --output-dir runs/full-video
-```
-
-Use Roboflow bib-detection/5 for bib boxes (YOLO still reads digits). Set
-`__ROBOFLOW_API_KEY__` in the environment first; no local server is needed:
+The output directory contains `annotated.mp4` and `summary.json`. To process only an initial portion or tune the schedules:
 
 ```bash
-uv run python bib_detection.py --input sample1/video.mp4 --bib-detector roboflow_2.0
-uv run python bib_detection.py --input sample1/video.mp4 --bib-detector rfdetr-large-t1
-uv run python bib_detection.py --input sample1/video.mp4 --bib-detector yolo26n-t1 --input-size 1024 --confidence 0.01
+uv run python bib_detection.py \
+  --input sample1/video.mp4 \
+  --max-frames 150 \
+  --detect-every 20 \
+  --read-every 10 \
+  --output-dir runs/short
 ```
 
-The last two names use `thomas-lamalle/bib-detection` versions 7 (RF-DETR Large)
-and 8 (YOLO26n). The local inference library handles the model's resize and
-maps boxes back to video coordinates. RF-DETR has a fixed 640×640 input; YOLO26n
-supports `--input-size` (832 by default). The YOLO digit reader is unchanged.
-
-Compare all bib detectors on one image, saving overlays and per-model JSON under
-`frame_results_comparison/<timestamp>`:
+To use the hosted Roboflow bib detector, provide `__ROBOFLOW_API_KEY__` in the environment and select a backend:
 
 ```bash
-uv run python compare_frame_models.py --image sample1/frame_04.jpg
+export ROBOFLOW_API_KEY="your-key"
+uv run python bib_detection.py --input /path/to/video.mp4 --output-dir runs/roboflow --bib-detector roboflow_2.0
 ```
 
-Process only the first 150 frames:
+## Project layout
 
-```powershell
-uv run python bib_detection.py `
-  --max-frames 150 `
-  --output-dir runs/short-video
-```
+- `bib_detection.py` — CLI, frame-processing pipeline, output and run configuration.
+- `detector.py` — bib localization and digit-reading backends.
+- `tracker.py` — optical-flow tracking, matching, and vote aggregation.
+- `tests/` — unit and video-pipeline tests.
 
-Detection runs every 20 frames by default. A smaller interval finds more runners
-and costs proportionally more detector time, because optical flow can only follow
-the bibs an earlier scan located. Use `--detect-every` and `--read-every` to
-change the intervals.
+## Development checks
 
-Each run creates:
-
-- `annotated.mp4`, containing every processed frame;
-- `summary.json`, containing the best bib, votes, first/last visible time and
-  performance timings for each temporary track.
-
-## Code
-
-- `detector.py` detects bib boxes and reads their digits. Bib-box detection and digit
-  reading are separate registries, `BIB_DETECTORS` and `BIB_READERS`; add an entry and
-  pass its name via `--bib-detector` / `--digit-reader` to swap a backend.
-- `tracker.py` follows boxes and stores bib votes.
-- `bib_detection.py` reads the video, calls detection/tracking and writes results.
-  `RunConfig` holds the schedule, locator tuning, bib pattern and chosen implementations.
-
-The main loop is:
-
-```text
-read frame
-→ follow existing tracks
-→ detect on schedule
-→ read tracked bibs when scheduled
-→ draw and write the frame
-```
-
-A track ID is temporary. If a runner disappears and is detected again later,
-the new detection may receive a new ID. Optical flow can also drift during
-occlusion or fast motion. The reported first and last times describe visibility;
-they are not precise finish times.
-
-## Checks
-
-```powershell
+```bash
 uv run pytest
-uv run ruff format --check .
 uv run ruff check .
+uv run ruff format --check .
 uv run ty check
 ```
