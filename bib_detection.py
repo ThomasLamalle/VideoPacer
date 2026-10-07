@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 # the smallest anchor either head can match. Running the same weights at 832 puts a
 # bib at ~28x36 px and locates runners up to 7.5s earlier. Recall peaks between 768
 # and 896 and falls off on both sides, so this is a plateau and not a lucky value.
+# The default YOLO26n detector also did best at 832 on sample1. With the OCR reader and
+# no stretch, it found 12 of 13 runners, against 11 at 1024 and 10 at 1280, and it runs
+# 2.5x faster than at 1280.
 BIB_INPUT_SIZE = 832
 BIB_CONFIDENCE = 0.1
 BIB_MODEL = detector.DetectorConfig(
@@ -50,8 +53,8 @@ DIGIT_MODEL = detector.DetectorConfig(
     str(ROOT / "bibobj/SVHN_custom-yolov4-tiny-detector_best.weights"),
     tuple(str(number) for number in range(10)),
 )
-BIB_DETECTOR = "yolov4"
-DIGIT_READER = "yolov4"
+BIB_DETECTOR = "yolo26n-v025"
+DIGIT_READER = "ppocr"
 
 
 @frozen
@@ -240,7 +243,10 @@ def process_video(
             if scheduled:
                 detections = detect_bibs(frame, bib_model, config, timings)
                 detection_frames.append(frame_id)
+                # Seeding new tracking points belongs to the tracking cost, so it is counted with optical flow.
+                stage_started = perf_counter()
                 tracker.correct(frame, detections, frame_id)
+                timings["optical_flow"] += perf_counter() - stage_started
 
             if frame_id % config.read_every == 0 and tracker.active_tracks:
                 stage_started = perf_counter()

@@ -14,6 +14,9 @@ from detector import BIB_PATTERN, BIB_READERS, BBox, BibDetection, BibReading, D
 MIN_POINTS = 6
 MAX_FLOW_ERROR = 1.5
 MATCH_IOU = 0.3
+# A corner score looks at a few pixels around each pixel (gradient, scoring window and peak picking), so the
+# corner search runs on the box plus this many pixels. Scoring a whole 1080p frame for one box cost about 55 ms.
+CORNER_CONTEXT = 4
 
 
 class TrackResult(TypedDict):
@@ -28,52 +31,67 @@ class TrackResult(TypedDict):
 
 
 def _find_points(gray: cv.typing.MatLike, bbox: BBox) -> np.ndarray:
+    """Return up to 50 trackable corners inside a box, in frame coordinates.
+
+    The search runs on a small window around the box, with a mask that keeps the corners inside the box. The
+    window keeps enough real pixels around the box that the corners are the same as a search of the whole frame.
+    """
     x, y, width, height = (int(value) for value in bbox)
     image_height, image_width = gray.shape[:2]
     left, top = max(0, x), max(0, y)
     right, bottom = min(image_width, x + width), min(image_height, y + height)
-    mask = np.zeros(gray.shape, dtype=np.uint8)
-    mask[top:bottom, left:right] = 255
-    points = cv.goodFeaturesToTrack(gray, maxCorners=50, qualityLevel=0.01, minDistance=3, mask=mask)
-    return points if points is not None else np.empty((0, 1, 2), dtype=np.float32)
+    if right <= left or bottom <= top:
+        return np.empty((0, 1, 2), dtype=np.float32)
+    window_left, window_top = max(0, left - CORNER_CONTEXT), max(0, top - CORNER_CONTEXT)
+    window_right, window_bottom = min(image_width, right + CORNER_CONTEXT), min(image_height, bottom + CORNER_CONTEXT)
+    window = gray[window_top:window_bottom, window_left:window_right]
+    mask = np.zeros(window.shape, dtype=np.uint8)
+    mask[top - window_top : bottom - window_top, left - window_left : right - window_left] = 255
+    points = cv.goodFeaturesToTrack(window, maxCorners=50, qualityLevel=0.01, minDistance=3, mask=mask)
+    if points is None:
+        return np.empty((0, 1, 2), dtype=np.float32)
+    return points + np.array([window_left, window_top], dtype=np.float32)
 
 
-def _move_track(
+def _move_tracks(
     previous_gray: cv.typing.MatLike,
     gray: cv.typing.MatLike,
-    track: Track,
-) -> tuple[BBox, np.ndarray] | None:
-    if len(track.points) < MIN_POINTS:
-        return None
+    tracks: list[Track],
+) -> list[tuple[BBox, np.ndarray] | None]:
+    """Move each track by the median motion of its points, or give None for a track that lost them.
+
+    All tracks share one optical-flow call each way. A call spends most of its time building image pyramids of
+    both frames, so one call per track multiplied that cost by the number of tracks. Each point is followed on its
+    own, so sharing the call does not change any result. A point counts only if following it back to the previous
+    frame lands within MAX_FLOW_ERROR pixels of where it started.
+    """
+    moves: list[tuple[BBox, np.ndarray] | None] = [None] * len(tracks)
+    followed = [index for index, track in enumerate(tracks) if len(track.points) >= MIN_POINTS]
+    if not followed:
+        return moves
+    points = np.concatenate([tracks[index].points for index in followed])
     moved, forward_status, _ = cv.calcOpticalFlowPyrLK(
-        previous_gray,
-        gray,
-        track.points,
-        np.empty_like(track.points),
-        winSize=(21, 21),
-        maxLevel=3,
+        previous_gray, gray, points, np.empty_like(points), winSize=(21, 21), maxLevel=3
     )
-    if moved is None or forward_status is None:
-        return None
     returned, backward_status, _ = cv.calcOpticalFlowPyrLK(
-        gray,
-        previous_gray,
-        moved,
-        np.empty_like(moved),
-        winSize=(21, 21),
-        maxLevel=3,
+        gray, previous_gray, moved, np.empty_like(moved), winSize=(21, 21), maxLevel=3
     )
-    if returned is None or backward_status is None:
-        return None
-    error = np.linalg.norm(track.points - returned, axis=2).ravel()
+    error = np.linalg.norm(points - returned, axis=2).ravel()
     valid = (forward_status.ravel() == 1) & (backward_status.ravel() == 1) & (error < MAX_FLOW_ERROR)
-    if valid.sum() < MIN_POINTS:
-        return None
-    old_points = track.points[valid].reshape(-1, 2)
-    new_points = moved[valid].reshape(-1, 2)
-    dx, dy = np.median(new_points - old_points, axis=0)
-    x, y, width, height = track.bbox
-    return (x + float(dx), y + float(dy), width, height), new_points.reshape(-1, 1, 2)
+
+    start = 0
+    for index in followed:
+        track = tracks[index]
+        end = start + len(track.points)
+        keep = valid[start:end]
+        if keep.sum() >= MIN_POINTS:
+            old_points = points[start:end][keep].reshape(-1, 2)
+            new_points = moved[start:end][keep].reshape(-1, 2)
+            dx, dy = np.median(new_points - old_points, axis=0)
+            x, y, width, height = track.bbox
+            moves[index] = (x + float(dx), y + float(dy), width, height), new_points.reshape(-1, 1, 2)
+        start = end
+    return moves
 
 
 def _iou(first: BBox, second: BBox) -> float:
@@ -150,8 +168,8 @@ class Tracker:
             self.previous_gray = gray
             return
 
-        for track in self.active_tracks:
-            moved = _move_track(self.previous_gray, gray, track)
+        tracks = self.active_tracks
+        for track, moved in zip(tracks, _move_tracks(self.previous_gray, gray, tracks), strict=True):
             if moved is None:
                 track.active = False
                 continue

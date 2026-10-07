@@ -18,6 +18,7 @@ PARAMETERS = {
     "roboflow_2.0": {"input_size": 416, "confidence": 0.1, "model": "bib-detection/5"},
     "rfdetr-large-t1": {"input_size": 640, "confidence": 0.1, "model": "bib-detection/7"},
     "yolo26n-t1": {"input_size": 1024, "confidence": 0.01, "model": "bib-detection/8"},
+    "yolo26n-v025": {"input_size": 832, "confidence": 0.01, "model": "BibBoxes v025 YOLO26n, OpenVINO"},
 }
 
 DEFAULT_DATASET = Path("/home/thomas/Projects/Datasets/test_dataset_rizvi.coco")

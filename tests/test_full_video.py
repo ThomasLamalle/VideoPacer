@@ -21,33 +21,7 @@ def test_full_video_matches_current_golden_and_reports_ground_truth(caplog: pyte
     found = {track["best_bib"] for track in summary["tracks"] if track["best_bib"]}
 
     assert summary["processed_frames"] == 523
-    assert found == {
-        "6500",
-        "13426",
-        "8717",
-        "6240",
-        "3246",
-        "1143",
-        "23728",
-        "21893",
-        "21892",
-        "6243",
-        "11461",
-        "11116",
-    }
-    assert found & expected == {
-        "6500",
-        "13426",
-        "8717",
-        "6240",
-        "3246",
-        "23728",
-        "21893",
-        "21892",
-        "6243",
-        "11461",
-        "11116",
-    }
-    assert "Ground truth: 11/13 bibs found" in caplog.text
-    assert "Missing: 3241, 4460" in caplog.text
-    assert "Extra: 1143" in caplog.text
+    assert found == expected
+    assert "Ground truth: 13/13 bibs found" in caplog.text
+    assert "Missing: none" in caplog.text
+    assert "Extra: none" in caplog.text

@@ -1,8 +1,10 @@
 """Tests for optical-flow tracks and bib votes."""
 
+import cv2 as cv
 import numpy as np
 import pytest
 
+import tracker as tracker_module
 from detector import BibDetection, Detection
 from tracker import Tracker
 
@@ -23,6 +25,41 @@ def test_optical_flow_moves_a_track():
 
     assert tracker.active_tracks[0].bbox[:2] == pytest.approx((23, 20), abs=1)
     assert tracker.active_tracks[0].last_frame == 1
+
+
+def two_textures(top_x: int, bottom_x: int) -> np.ndarray:
+    """Two textured patches, so each can move on its own."""
+    image = np.zeros((80, 200, 3), dtype=np.uint8)
+    rng = np.random.default_rng(4)
+    image[5:25, top_x : top_x + 35] = rng.integers(40, 255, (20, 35, 3), dtype=np.uint8)
+    image[45:65, bottom_x : bottom_x + 35] = rng.integers(40, 255, (20, 35, 3), dtype=np.uint8)
+    return image
+
+
+def test_tracks_sharing_one_flow_call_keep_their_own_motion():
+    tracker = Tracker()
+    tracker.follow(two_textures(20, 120), 0)
+    boxes = [BibDetection((20, 5, 35, 20), "0012", 0.9), BibDetection((120, 45, 35, 20), "0034", 0.9)]
+    tracker.correct(two_textures(20, 120), boxes, 0)
+
+    tracker.follow(two_textures(23, 118), 1)
+
+    first, second = tracker.active_tracks
+    assert first.bbox[:2] == pytest.approx((23, 5), abs=1)
+    assert second.bbox[:2] == pytest.approx((118, 45), abs=1)
+
+
+@pytest.mark.parametrize("bbox", [(30, 40, 35, 20), (-5, -5, 30, 25), (380, 280, 40, 40), (500, 500, 10, 10)])
+def test_corner_search_near_a_box_matches_a_whole_frame_search(bbox):
+    gray = np.random.default_rng(7).integers(0, 255, (300, 400), dtype=np.uint8)
+    x, y, width, height = bbox
+    mask = np.zeros(gray.shape, dtype=np.uint8)
+    mask[max(0, y) : y + height, max(0, x) : x + width] = 255
+    whole_frame = cv.goodFeaturesToTrack(gray, maxCorners=50, qualityLevel=0.01, minDistance=3, mask=mask)
+
+    found = tracker_module._find_points(gray, bbox)
+
+    assert np.array_equal(found, whole_frame if whole_frame is not None else np.empty((0, 1, 2), np.float32))
 
 
 def test_failed_flow_deactivates_the_track():

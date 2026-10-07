@@ -1,15 +1,21 @@
 """Detect bib boxes and read the digits inside them."""
 
+import math
 import os
 import re
 from functools import cache, partial
+from pathlib import Path
 from typing import Protocol
 
 import cv2 as cv
 import numpy as np
+import onnxruntime as ort
+import openvino as ov
 from attrs import frozen
 
 type BBox = tuple[float, float, float, float]
+
+MODELS = Path(__file__).resolve().parent / "bibobj"
 
 
 @frozen
@@ -133,6 +139,21 @@ BIB_PATTERN = r"\d{4,5}"
 DIGIT_THRESHOLD = 0.5
 
 
+def _crop(image: cv.typing.MatLike, bbox: BBox, margin: float) -> cv.typing.MatLike | None:
+    """Cut a box out of the image, grown on every side by ``margin`` times its height.
+
+    Return None when nothing of the box is inside the image.
+    """
+    x, y, width, height = (int(value) for value in bbox)
+    image_height, image_width = image.shape[:2]
+    grow = int(height * margin)
+    left, top = max(0, x - grow), max(0, y - grow)
+    right, bottom = min(image_width, x + width + grow), min(image_height, y + height + grow)
+    if right <= left or bottom <= top:
+        return None
+    return image[top:bottom, left:right]
+
+
 def read_bib(
     image: cv.typing.MatLike,
     bbox: BBox,
@@ -145,15 +166,11 @@ def read_bib(
     ``bib_pattern`` reads as None, so it counts as an attempt that found nothing and
     casts no vote for a bib number.
     """
-    x, y, width, height = (int(value) for value in bbox)
-    image_height, image_width = image.shape[:2]
-    margin = int(height * DIGIT_CROP_MARGIN)
-    left, top = max(0, x - margin), max(0, y - margin)
-    right, bottom = min(image_width, x + width + margin), min(image_height, y + height + margin)
-    if right <= left or bottom <= top:
+    crop = _crop(image, bbox, DIGIT_CROP_MARGIN)
+    if crop is None:
         return None
 
-    digits = reader.detect(image[top:bottom, left:right], DIGIT_THRESHOLD)
+    digits = reader.detect(crop, DIGIT_THRESHOLD)
     if not digits:
         return None
     digits.sort(key=lambda digit: digit.bbox[0])
@@ -201,6 +218,129 @@ def find_roboflow_bibs(
     ]
 
 
+# YOLO26n trained at 1280 on BibBoxes v025 (TrainBibDetector run 932e5ca1), exported to OpenVINO with any input
+# shape allowed: yolo export model=best.pt format=openvino dynamic=True
+YOLO26_MODEL = MODELS / "yolo26n_v025_openvino_model/y26n_v025.xml"
+# A YOLO network shrinks the image by up to 32 times, so each side of its input must be a multiple of 32.
+YOLO_STRIDE = 32
+
+
+@cache
+def get_openvino_model(model_path: Path, height: int, width: int) -> ov.CompiledModel:
+    """Compile a model for one input shape, once.
+
+    The model file accepts any shape. Fixing the shape before compiling lets OpenVINO plan for it, and the cache
+    keeps one compiled model per shape.
+    """
+    core = ov.Core()
+    model = core.read_model(model_path)
+    model.reshape([1, 3, height, width])
+    return core.compile_model(model, "CPU")
+
+
+def find_openvino_bibs(
+    image: cv.typing.MatLike, config: DetectorConfig, model_path: Path = YOLO26_MODEL
+) -> list[Detection]:
+    """Find bibs with a one-class Ultralytics YOLO model exported to OpenVINO.
+
+    The frame is prepared as in training: scaled so its long side is ``config.input_size``, centred, and padded
+    with gray to the next multiple of 32 on the short side. A 1920x1080 frame at 832 runs at 832x480, about half
+    the pixels of an 832x832 square. The model returns many overlapping candidates, so overlapping boxes are
+    reduced to the best one, as in the YOLOv4 detector.
+    """
+    height, width = image.shape[:2]
+    scale = config.input_size / max(height, width)
+    resized_width, resized_height = round(width * scale), round(height * scale)
+    net_width = math.ceil(resized_width / YOLO_STRIDE) * YOLO_STRIDE
+    net_height = math.ceil(resized_height / YOLO_STRIDE) * YOLO_STRIDE
+    left, top = (net_width - resized_width) // 2, (net_height - resized_height) // 2
+    canvas = np.full((net_height, net_width, 3), 114, dtype=np.uint8)
+    canvas[top : top + resized_height, left : left + resized_width] = cv.resize(image, (resized_width, resized_height))
+    blob = cv.dnn.blobFromImage(canvas, 1 / 255.0, swapRB=True)
+    model = get_openvino_model(model_path, net_height, net_width)
+
+    # One column per candidate: centre x, centre y, width, height and score, in network pixels.
+    center_x, center_y, box_width, box_height, scores = model(blob)[0][0]
+    keep = scores > config.confidence
+    boxes = np.stack(
+        [
+            (center_x[keep] - box_width[keep] / 2 - left) / scale,
+            (center_y[keep] - box_height[keep] / 2 - top) / scale,
+            box_width[keep] / scale,
+            box_height[keep] / scale,
+        ],
+        axis=1,
+    ).tolist()
+    kept_scores = scores[keep].tolist()
+    kept = np.asarray(cv.dnn.NMSBoxes(boxes, kept_scores, config.confidence, 0.4)).flatten()
+    return [Detection("bib", tuple(boxes[index]), kept_scores[index]) for index in kept]
+
+
+# PaddleOCR's PP-OCRv6 small text recognizer, as shipped by RapidOCR 3.9, run with ONNX Runtime. It reads one line
+# of text from a whole crop, so it needs no box per digit. Its alphabet is stored inside the model file.
+OCR_MODEL = MODELS / "PP-OCRv6_rec_small.onnx"
+# The recognizer was trained on text lines 48 px high, padded to at least 320 px wide. Narrower padding is
+# faster but changed 8 of 40 test readings.
+OCR_HEIGHT = 48
+OCR_MIN_WIDTH = 320
+# The crop is grown by this fraction of the box height, so digits at the edge of a box that optical flow has
+# moved, or that the bib has outgrown while approaching, are not cut.
+OCR_CROP_MARGIN = 0.1
+# The recognizer gives one prediction per 8 px column of its 48 px high input. On a whole-bib crop the digits are
+# much shorter than the crop, so a digit gets about two columns, and two equal digits side by side ("11") can merge
+# into one. Stretching the crop sideways gives each digit more columns. On 40 labelled bib crops, 1.5 and 2 both
+# read 27 of 28 readable bibs against 24 unstretched, and 1.5 did best on sample1.
+OCR_STRETCH = 1.5
+DIGITS = set("0123456789")
+
+
+@cache
+def get_ocr(model_path: Path) -> tuple[ort.InferenceSession, list[str]]:
+    """Load the recognizer and its alphabet once. Index 0 is "no character" and the last entry is a space."""
+    session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+    alphabet = ["", *session.get_modelmeta().custom_metadata_map["character"].splitlines(), " "]
+    return session, alphabet
+
+
+def read_bib_ocr(
+    image: cv.typing.MatLike,
+    bbox: BBox,
+    _digit_model: DetectorLike,
+    bib_pattern: str = BIB_PATTERN,
+) -> BibReading | None:
+    """Read a bib number with the text recognizer, or return None when no bib number is read.
+
+    ``_digit_model`` is unused. It keeps the signature that every reader shares.
+
+    For each column of the crop, the recognizer gives the probability of every character and of "no character".
+    Keeping the most likely one per column, merging repeats and dropping "no character" gives the text. The
+    longest run of digits in it is the bib number, so a letter or a word printed next to the number is ignored.
+    ``confidence`` is the mean probability of those digits.
+    """
+    crop = _crop(image, bbox, OCR_CROP_MARGIN)
+    if crop is None:
+        return None
+    resized_width = math.ceil(OCR_HEIGHT * crop.shape[1] / crop.shape[0] * OCR_STRETCH)
+    batch = np.zeros((1, 3, OCR_HEIGHT, max(OCR_MIN_WIDTH, resized_width)), dtype=np.float32)
+    # Pixels go to the range -1 to 1, and the padding stays at 0, as in training.
+    batch[0, :, :, :resized_width] = cv.resize(crop, (resized_width, OCR_HEIGHT)).transpose(2, 0, 1) / 127.5 - 1
+
+    session, alphabet = get_ocr(OCR_MODEL)
+    probabilities = session.run(None, {session.get_inputs()[0].name: batch})[0][0]
+    best = probabilities.argmax(axis=1)
+    kept = (best != 0) & np.r_[True, best[1:] != best[:-1]]
+    scores = probabilities.max(axis=1)[kept]
+    # One character per kept column, with anything that is not a digit as "-", so positions match ``scores``.
+    text = "".join(alphabet[index] if alphabet[index] in DIGITS else "-" for index in best[kept])
+    runs = [match.span() for match in re.finditer(r"\d+", text)]
+    if not runs:
+        return None
+    start, end = max(runs, key=lambda span: span[1] - span[0])
+    if re.fullmatch(bib_pattern, text[start:end]) is None:
+        return None
+    return BibReading(text[start:end], float(scores[start:end].mean()))
+
+
 def read_bibs(
     image: cv.typing.MatLike,
     boxes: list[Detection],
@@ -235,5 +375,6 @@ BIB_DETECTORS = {
     "roboflow_2.0": find_roboflow_bibs,
     "rfdetr-large-t1": partial(find_roboflow_bibs, model_id="bib-detection/7"),
     "yolo26n-t1": partial(find_roboflow_bibs, model_id="bib-detection/8"),
+    "yolo26n-v025": find_openvino_bibs,
 }
-BIB_READERS = {"yolov4": read_bib}
+BIB_READERS = {"yolov4": read_bib, "ppocr": read_bib_ocr}

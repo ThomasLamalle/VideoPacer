@@ -11,7 +11,18 @@ Boxes are labeled with a temporary track ID and the current best bib reading. `D
 
 ## Run
 
-Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/). The sample input video and local Darknet model weights are not included in this repository. Use your own video; the default backend also expects its model files under `bibobj/` (see `bib_detection.py`).
+Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/). The sample input video and the model files are not included in this repository. Use your own video. The default detector and reader expect their model files under `bibobj/`:
+
+- `yolo26n_v025_openvino_model/`: the bib detector, a YOLO26n trained on BibBoxes v025 and exported from TrainBibDetector with `yolo export model=best.pt format=openvino dynamic=True`.
+- `PP-OCRv6_rec_small.onnx`: PaddleOCR's text recognizer as shipped by RapidOCR 3.9, from [ModelScope](https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx) (SHA-256 `6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884`).
+
+The older YOLOv4 detector and SVHN digit reader still work with `--bib-detector yolov4 --digit-reader yolov4` and their Darknet files in the same folder.
+
+OpenVINO sends anonymous usage data to Intel each time it is imported, unless declined. To decline it once for your user account:
+
+```bash
+mkdir -p ~/intel && printf 0 > ~/intel/openvino_telemetry
+```
 
 ```bash
 uv sync

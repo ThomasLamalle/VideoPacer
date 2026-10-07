@@ -174,7 +174,9 @@ def test_reads_a_surviving_track_that_detection_misses(tmp_path, monkeypatch):
     monkeypatch.setattr(bib_detection, "detect_bibs", detect)
     monkeypatch.setattr(bib_detection.detector, "get_detector", lambda _config: Reader())
 
-    summary = bib_detection.process_video(source, tmp_path / "out", RunConfig(detect_every=1, read_every=1))
+    summary = bib_detection.process_video(
+        source, tmp_path / "out", RunConfig(detect_every=1, read_every=1, digit_reader="yolov4")
+    )
 
     assert summary["tracks"][0]["votes"] == {"0012": pytest.approx(1.8)}
 
@@ -195,7 +197,7 @@ def test_pipeline_applies_the_configured_bib_pattern(tmp_path, monkeypatch):
     monkeypatch.setattr(bib_detection.detector, "get_detector", lambda _config: Reader())
 
     summary = bib_detection.process_video(
-        source, tmp_path / "out", RunConfig(detect_every=2, read_every=1, bib_pattern="[A-Z]")
+        source, tmp_path / "out", RunConfig(detect_every=2, read_every=1, bib_pattern="[A-Z]", digit_reader="yolov4")
     )
 
     assert summary["bib_pattern"] == "[A-Z]"

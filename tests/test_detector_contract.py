@@ -169,3 +169,59 @@ def test_read_bib_does_not_send_an_empty_crop_to_the_model():
     result = detector.read_bib(np.zeros((20, 20, 3), dtype=np.uint8), (50, 50, 10, 10), reader)
 
     assert result is None
+
+
+def test_openvino_detector_letterboxes_the_frame_and_maps_boxes_back(monkeypatch):
+    shapes = []
+
+    def compiled(blob):
+        shapes.append(blob.shape)
+        # Two candidates in network pixels: centre x, centre y, width, height, score. The second is below threshold.
+        return [np.array([[[416, 100], [240, 100], [52, 10], [26, 10], [0.9, 0.05]]], dtype=np.float32)]
+
+    monkeypatch.setattr(detector, "get_openvino_model", lambda _path, _height, _width: compiled)
+    config = detector.DetectorConfig("unused", "unused", ("bib",), input_size=832, confidence=0.1)
+
+    (found,) = detector.find_openvino_bibs(np.zeros((1080, 1920, 3), dtype=np.uint8), config)
+
+    # 1920x1080 scales by 832/1920 to 832x468, padded to 832x480 with 6 px above the frame.
+    scale = 832 / 1920
+    assert shapes == [(1, 3, 480, 832)]
+    assert found.bbox == pytest.approx(((416 - 26) / scale, (240 - 13 - 6) / scale, 52 / scale, 26 / scale))
+    assert found.confidence == pytest.approx(0.9)
+
+
+def fake_ocr(monkeypatch, columns: list[tuple[str, float]]) -> None:
+    """Make the recognizer return these (best character, probability) columns, "" meaning no character."""
+    alphabet = ["", *"0123456789B", " "]
+    probabilities = np.full((len(columns), len(alphabet)), 0.001, dtype=np.float32)
+    for column, (character, probability) in enumerate(columns):
+        probabilities[column, alphabet.index(character)] = probability
+    session = SimpleNamespace(
+        get_inputs=lambda: [SimpleNamespace(name="x")], run=lambda _outputs, _feed: [probabilities[None]]
+    )
+    monkeypatch.setattr(detector, "get_ocr", lambda _path: (session, alphabet))
+
+
+def test_ocr_reader_merges_repeats_and_keeps_the_longest_run_of_digits(monkeypatch):
+    # Reads "1B 3325": a wave label, then the number. The doubled 3 only counts twice because "" splits it.
+    columns = [("1", 0.9), ("B", 0.9), (" ", 0.9), ("3", 0.8), ("3", 0.8), ("", 0.9), ("3", 0.6), ("2", 1.0)]
+    fake_ocr(monkeypatch, [*columns, ("5", 1.0), ("", 0.9)])
+
+    reading = detector.read_bib_ocr(np.zeros((40, 60, 3), dtype=np.uint8), (0, 0, 60, 40), DigitsReader())
+
+    assert reading is not None
+    assert reading.bib_string == "3325"
+    assert reading.confidence == pytest.approx((0.8 + 0.6 + 1.0 + 1.0) / 4)
+
+
+def test_ocr_reader_rejects_a_number_that_does_not_match_the_pattern(monkeypatch):
+    fake_ocr(monkeypatch, [("1", 0.9), ("2", 0.9), ("3", 0.9)])
+
+    assert detector.read_bib_ocr(np.zeros((40, 60, 3), dtype=np.uint8), (0, 0, 60, 40), DigitsReader()) is None
+
+
+def test_ocr_reader_does_not_run_on_a_box_outside_the_image(monkeypatch):
+    monkeypatch.setattr(detector, "get_ocr", lambda _path: pytest.fail("empty crop sent to the recognizer"))
+
+    assert detector.read_bib_ocr(np.zeros((20, 20, 3), dtype=np.uint8), (50, 50, 10, 10), DigitsReader()) is None
