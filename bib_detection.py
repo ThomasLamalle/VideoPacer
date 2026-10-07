@@ -14,7 +14,9 @@ First 150 frames:
 import csv
 import json
 import logging
+import platform
 import re
+import subprocess
 from datetime import datetime
 from math import isfinite
 from pathlib import Path
@@ -30,6 +32,8 @@ from detector import BibDetection
 from tracker import Track, Tracker, TrackResult
 
 ROOT = Path(__file__).resolve().parent
+# One row per full run, so each trial can be traced to the speed and recognition it gave.
+HISTORY = ROOT / "performance_history.csv"
 logger = logging.getLogger(__name__)
 # The locator cfg declares a 416x416 input and keeps its anchors in absolute pixels
 # for that input, so squashing 1920x1080 down to 416 leaves a bib at ~14x18 px, below
@@ -95,6 +99,13 @@ class Timings(TypedDict):
     total: float
 
 
+class GroundTruth(TypedDict):
+    expected: int
+    matched: list[str]
+    missing: list[str]
+    extra: list[str]
+
+
 class Summary(TypedDict):
     input: str
     fps: float
@@ -109,6 +120,7 @@ class Summary(TypedDict):
     detection_frames: list[int]
     tracks: list[TrackResult]
     seconds: Timings
+    ground_truth: GroundTruth | None
 
 
 def detect_bibs(
@@ -186,18 +198,104 @@ def _open_video(input_path: Path, output_dir: Path | None) -> tuple[cv.VideoCapt
         raise
 
 
-def log_ground_truth(input_path: Path, tracks: list[TrackResult]) -> None:
-    """Compare detected bibs with a ground_truth.csv beside the input video, if present."""
+def log_ground_truth(input_path: Path, tracks: list[TrackResult]) -> GroundTruth | None:
+    """Compare detected bibs with a ground_truth.csv beside the input video, if present, and log the result."""
     truth_path = input_path.parent / "ground_truth.csv"
     if not truth_path.is_file():
-        return
+        return None
     with truth_path.open(newline="", encoding="utf-8") as file:
         expected = {row["bib"] for row in csv.DictReader(file)}
     found = {track["best_bib"] for track in tracks if track["best_bib"]}
-    logger.info("Ground truth: %d/%d bibs found", len(found & expected), len(expected))
-    logger.info("Matched: %s", ", ".join(sorted(found & expected)) or "none")
-    logger.info("Missing: %s", ", ".join(sorted(expected - found)) or "none")
-    logger.info("Extra: %s", ", ".join(sorted(found - expected)) or "none")
+    truth: GroundTruth = {
+        "expected": len(expected),
+        "matched": sorted(found & expected),
+        "missing": sorted(expected - found),
+        "extra": sorted(found - expected),
+    }
+    logger.info("Ground truth: %d/%d bibs found", len(truth["matched"]), truth["expected"])
+    logger.info("Matched: %s", ", ".join(truth["matched"]) or "none")
+    logger.info("Missing: %s", ", ".join(truth["missing"]) or "none")
+    logger.info("Extra: %s", ", ".join(truth["extra"]) or "none")
+    return truth
+
+
+def _git_commit() -> str:
+    """Return the short commit hash, marked "+changes" when Python files or dependencies differ from it."""
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    changed = subprocess.run(["git", "diff", "--quiet", "HEAD", "--", "*.py", "uv.lock"], cwd=ROOT, check=False)
+    return f"{commit}+changes" if changed.returncode else commit
+
+
+def _cpu() -> str:
+    """Return the processor model. Python leaves it empty on Linux, so it is read from /proc/cpuinfo there."""
+    cpuinfo = Path("/proc/cpuinfo")
+    lines = cpuinfo.read_text().splitlines() if cpuinfo.is_file() else []
+    names = [line.split(":", 1)[1].strip() for line in lines if line.startswith("model name")]
+    return names[0] if names else platform.processor()
+
+
+def _power_source() -> str:
+    """Return "AC" or "battery" on a Linux laptop, and "" elsewhere. Runs on battery can take twice as long."""
+
+    def read(path: Path) -> str:
+        return path.read_text().strip() if path.is_file() else ""
+
+    # A wireless mouse also reports itself "online", so only chargers count.
+    chargers = [path for path in Path("/sys/class/power_supply").glob("*") if read(path / "type") in {"Mains", "USB"}]
+    if not chargers:
+        return ""
+    return "AC" if any(read(path / "online") == "1" for path in chargers) else "battery"
+
+
+def record_performance(summary: Summary, note: str, report_path: Path, history_path: Path) -> None:
+    """Write a performance report for one run and add the same fields as a row of the performance history.
+
+    ``note`` says what the run tries. ``other_s`` is the time outside the timed stages, mostly video decoding.
+    """
+    seconds = summary["seconds"]
+    staged = seconds["detection"] + seconds["optical_flow"] + seconds["digit_reading"] + seconds["video_writing"]
+    truth = summary["ground_truth"]
+    video = Path(summary["input"])
+    row = {
+        "date": datetime.now().isoformat(timespec="seconds"),
+        "commit": _git_commit(),
+        "note": note,
+        "video": f"{video.parent.name}/{video.name}",
+        "frames": summary["processed_frames"],
+        "x_realtime": round(summary["processed_frames"] / summary["fps"] / seconds["total"], 2),
+        "total_s": round(seconds["total"], 1),
+        "detection_s": round(seconds["detection"], 1),
+        "optical_flow_s": round(seconds["optical_flow"], 1),
+        "digit_reading_s": round(seconds["digit_reading"], 1),
+        "video_writing_s": round(seconds["video_writing"], 1),
+        "other_s": round(seconds["total"] - staged, 1),
+        "found": f"{len(truth['matched'])}/{truth['expected']}" if truth else "",
+        "missing": " ".join(truth["missing"]) if truth else "",
+        "extra": " ".join(truth["extra"]) if truth else "",
+        "detect_every": summary["detect_every"],
+        "read_every": summary["read_every"],
+        "input_size": summary["input_size"],
+        "confidence": summary["confidence"],
+        "bib_detector": summary["bib_detector"],
+        "digit_reader": summary["digit_reader"],
+        "bib_pattern": summary["bib_pattern"],
+        "cpu": _cpu(),
+        "power": _power_source(),
+    }
+    report = "\n".join(f"- {key}: {value}".rstrip() for key, value in row.items())
+    report_path.write_text(f"# Performance report\n\n{report}\n", encoding="utf-8")
+    # ponytail: the header is written once, so a change of columns needs a new history file.
+    is_new = not history_path.is_file()
+    with history_path.open("a", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=list(row))
+        if is_new:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def process_video(
@@ -279,11 +377,12 @@ def process_video(
         "detection_frames": detection_frames,
         "tracks": tracker.results(fps),
         "seconds": timings,
+        "ground_truth": None,
     }
+    logger.info(f"Processed {processed_frames} frames, found {len(tracker.tracks)} tracks in {timings['total']:.2f}s")
+    summary["ground_truth"] = log_ground_truth(input_path, summary["tracks"])
     if output_dir is not None:
         (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    logger.info(f"Processed {processed_frames} frames, found {len(tracker.tracks)} tracks in {timings['total']:.2f}s")
-    log_ground_truth(input_path, summary["tracks"])
     return summary
 
 
@@ -312,11 +411,16 @@ def main(  # noqa: PLR0913, PLR0917 -- a CLI exposes one argument per tunable kn
     digit_reader: Annotated[
         str, typer.Option(help=f"Digit reader to use ({', '.join(sorted(detector.BIB_READERS))}).")
     ] = DIGIT_READER,
+    note: Annotated[str, typer.Option(help="What this run tries, saved in the performance history.")] = "",
 ) -> None:
-    """Run bib detection and tracking on a video."""
+    """Run bib detection and tracking on a video.
+
+    A run over the whole video also writes performance.md beside its outputs and adds a row to
+    performance_history.csv, so a trial can be compared with the ones before it.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     output_dir = output_dir or ROOT / "runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    process_video(
+    summary = process_video(
         input_path,
         output_dir,
         RunConfig(
@@ -330,6 +434,9 @@ def main(  # noqa: PLR0913, PLR0917 -- a CLI exposes one argument per tunable kn
             digit_reader=digit_reader,
         ),
     )
+    # A shortened run is not comparable with the history, which holds whole videos only.
+    if max_frames is None:
+        record_performance(summary, note, output_dir / "performance.md", HISTORY)
 
 
 if __name__ == "__main__":

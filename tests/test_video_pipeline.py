@@ -1,5 +1,6 @@
 """Tests for the direct video-processing loop."""
 
+import csv
 import logging
 from pathlib import Path
 from time import sleep
@@ -95,6 +96,28 @@ def test_no_ground_truth_skips_comparison_and_video(tmp_path, monkeypatch, caplo
     assert summary["processed_frames"] == 2
     assert "Ground truth:" not in caplog.text
     assert list(tmp_path.iterdir()) == [source]
+
+
+def test_a_run_is_reported_and_added_to_the_history(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    make_video(source)
+    (tmp_path / "ground_truth.csv").write_text("bib,finish_time\n0012,07:00:00\n0034,07:00:01\n", encoding="utf-8")
+    monkeypatch.setattr(
+        bib_detection,
+        "detect_bibs",
+        lambda _frame, _model, _config, _timings=None: [BibDetection((10, 10, 40, 20), "0012", 0.9)],
+    )
+    summary = bib_detection.process_video(source, None)
+    history = tmp_path / "history.csv"
+
+    for note in ("first try", "second try"):
+        bib_detection.record_performance(summary, note, tmp_path / "performance.md", history)
+
+    assert "- found: 1/2" in (tmp_path / "performance.md").read_text(encoding="utf-8")
+    with history.open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert [row["note"] for row in rows] == ["first try", "second try"]
+    assert rows[0]["missing"] == "0034"
 
 
 def test_detects_only_on_schedule(tmp_path, monkeypatch):
