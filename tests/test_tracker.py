@@ -250,3 +250,40 @@ def test_an_overlapping_newer_track_with_the_same_number_merges_into_the_older_o
     assert track.track_id == 0
     assert track.votes == {"0012": pytest.approx(2.7)}
     assert [frame_id for frame_id, _bib, _confidence in track.readings] == [0, 1, 1]
+
+
+def ended_then_restarted(new_box: tuple[float, float, float, float], new_frame: int) -> Tracker:
+    """A 0012 track lost at frame 0 with 3 readings, then a new 0012 track read 3 times from ``new_frame``."""
+    tracker = Tracker()
+    tracker.follow(frame(), 0)
+    tracker.correct(frame(), [BibDetection((20, 20, 35, 20), "0012", 0.9)], 0)
+    old = tracker.tracks[0]
+    old.add_vote("0012", 0.9, 1)
+    old.add_vote("0012", 0.9, 2)
+    old.active = False
+
+    tracker.correct(frame(), [BibDetection(new_box, "0012", 0.9)], new_frame)
+    assert len(tracker.tracks) == 2
+    new = tracker.tracks[1]
+    new.add_vote("0012", 0.9, new_frame + 1)
+    new.add_vote("0012", 0.9, new_frame + 2)
+    tracker.correct(frame(), [], new_frame + 3)
+    return tracker
+
+
+def test_an_ended_track_merges_with_a_later_track_of_the_same_number_that_starts_nearby():
+    # 40 px from the lost box after 30 frames, within 20 px x (2 + 0.15 x 30).
+    tracker = ended_then_restarted((60, 20, 35, 20), 30)
+
+    (track,) = tracker.tracks
+    assert track.track_id == 0
+    assert track.active
+    assert track.bbox == (60, 20, 35, 20)
+    assert len(track.readings) == 6
+
+
+def test_a_later_track_of_the_same_number_far_from_the_lost_one_stays_separate():
+    # 60 px from the lost box after 1 frame, beyond 20 px x (2 + 0.15).
+    tracker = ended_then_restarted((80, 20, 35, 20), 1)
+
+    assert [track.track_id for track in tracker.tracks] == [0, 1]

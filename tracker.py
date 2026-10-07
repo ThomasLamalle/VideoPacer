@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from itertools import count
 from typing import TypedDict
 
 import cv2 as cv
 import numpy as np
-from attrs import define, field
+from attrs import Factory, define, field
 
 from detector import BIB_PATTERN, BIB_READERS, BBox, BibDetection, BibReading, DetectorLike
 
@@ -32,6 +33,18 @@ DIGIT_WEIGHT = 5
 # locked track again (94 calls) kept 6240 locked on 5240 after reading 5240, 6240, 6740.
 LOCK_READS = 3
 LOCKED_READ_EVERY = 60
+# A track that ended merges into a newer track with the same best number started at most this many frames later
+# (10 s at 30 fps), when both have at least MERGE_MIN_READINGS readings. A runner hidden for a moment comes back
+# as a new track, and on sample1 the gap was 6 frames. The readings minimum keeps one misread from merging two
+# runners.
+MERGE_GAP_FRAMES = 300
+MERGE_MIN_READINGS = 3
+# The newer track must also start near where the older one was lost: within MERGE_NEAR_HEIGHTS box heights, plus
+# MERGE_SPEED_HEIGHTS per frame of gap. On sample1 bibs moved at most 0.15 box heights per frame, and the newer
+# 11461 track started 1.4 heights from the older one after 6 frames.
+# ponytail: a straight radius ignores direction; extrapolate the older track's motion if long gaps merge wrongly.
+MERGE_NEAR_HEIGHTS = 2.0
+MERGE_SPEED_HEIGHTS = 0.15
 
 
 class Reading(TypedDict):
@@ -148,6 +161,8 @@ class Track:
     last_frame: int
     last_detection_frame: int
     last_read_frame: int = -1
+    # Where the track started, to tell whether it continues a track that ended nearby.
+    start_bbox: BBox = field(default=Factory(lambda track: track.bbox, takes_self=True))
     votes: dict[str, float] = field(factory=dict)
     # Every reading in order, as (frame, bib, confidence), so a rule can weigh agreement over time.
     readings: list[tuple[int, str, float]] = field(factory=list)
@@ -308,24 +323,38 @@ class Tracker:
         self._merge_duplicates()
 
     def _merge_duplicates(self) -> None:
-        """Fold a newer active track into an older one with the same best number when their boxes overlap.
+        """Fold a newer active track into an older one with the same best number that belongs to the same runner.
 
-        One runner wears one bib, so such tracks are one runner, typically a new track started after an occlusion
-        while the old one still followed something nearby. The older track keeps its ID and first frame, takes the
-        votes and readings of the newer one, and its box and points when the newer one was detected more recently.
+        One runner wears one bib, so two tracks with the same number are one runner when either:
+        - both are active and their boxes overlap, typically a new track started after an occlusion while the old
+          one still followed something nearby;
+        - the older one ended at most MERGE_GAP_FRAMES before the newer one started, near where the older one was
+          lost, and both have at least MERGE_MIN_READINGS readings.
+
+        The older track keeps its ID and first frame, and becomes active again. It takes the votes and readings of
+        the newer one, and its box and points when the newer one was detected more recently or the older one ended.
         """
-        tracks = self.active_tracks
-        for index, newer in enumerate(tracks):
+
+        def same_runner(older: Track, newer: Track) -> bool:
+            if newer.best_bib is None or older.best_bib != newer.best_bib:
+                return False
+            if older.active:
+                return _iou(older.bbox, newer.bbox) > 0
+            gap = max(0, newer.first_frame - older.last_frame)
+            x, y, width, height = older.bbox
+            start_x, start_y, start_width, start_height = newer.start_bbox
+            distance = math.dist(
+                (x + width / 2, y + height / 2), (start_x + start_width / 2, start_y + start_height / 2)
+            )
+            return (
+                gap <= MERGE_GAP_FRAMES
+                and min(len(older.readings), len(newer.readings)) >= MERGE_MIN_READINGS
+                and distance <= height * (MERGE_NEAR_HEIGHTS + MERGE_SPEED_HEIGHTS * gap)
+            )
+
+        for newer in self.active_tracks:
             older = next(
-                (
-                    track
-                    for track in tracks[:index]
-                    if track.active
-                    and newer.best_bib is not None
-                    and track.best_bib == newer.best_bib
-                    and _iou(track.bbox, newer.bbox) > 0
-                ),
-                None,
+                (track for track in self.tracks[: self.tracks.index(newer)] if same_runner(track, newer)), None
             )
             if older is None:
                 continue
@@ -334,9 +363,10 @@ class Tracker:
             older.readings = sorted(older.readings + newer.readings)
             older.last_frame = max(older.last_frame, newer.last_frame)
             older.last_read_frame = max(older.last_read_frame, newer.last_read_frame)
-            if newer.last_detection_frame > older.last_detection_frame:
+            if not older.active or newer.last_detection_frame > older.last_detection_frame:
                 older.bbox, older.points = newer.bbox, newer.points
                 older.last_detection_frame = newer.last_detection_frame
+            older.active = True
             newer.active = False
             self.tracks.remove(newer)
 
