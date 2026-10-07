@@ -36,7 +36,7 @@ uv run pre-commit install    # hooks: file hygiene, ruff, ty, and only the golde
 
 The run ends with `summary.json`, a comparison with a `ground_truth.csv` beside the input video, and, for a whole-video CLI run, a `performance.md` report and a new row in `performance_history.csv`.
 
-Backends are picked by name from `detector.BIB_DETECTORS` and `detector.BIB_READERS` (`RunConfig.bib_detector` / `digit_reader`, CLI `--bib-detector` / `--digit-reader`). The defaults are `yolo26n-v025`, a YOLO26n through OpenVINO letterboxed to a multiple of 32 with NMS in code because the export is not end-to-end, and `ppocr`, the PP-OCRv6 recognizer through ONNX Runtime with greedy CTC decoding, the longest digit run, and crops stretched 1.5 times horizontally. The Roboflow backends need `ROBOFLOW_API_KEY`. `evaluate_models.py` scores the detectors on a COCO test set under `~/Projects/Datasets`.
+Backends are picked by name from `detector.BIB_DETECTORS` and `detector.BIB_READERS` (`RunConfig.bib_detector` / `digit_reader`, CLI `--bib-detector` / `--digit-reader`). The defaults are `yolo26n-v025`, a YOLO26n through OpenVINO letterboxed to a multiple of 32 with NMS in code because the export is not end-to-end, and `ppocr`, the PP-OCRv6 recognizer (ONNX file) through OpenVINO with greedy CTC decoding, the longest digit run, and crops stretched 1.5 times horizontally. The Roboflow backends need `ROBOFLOW_API_KEY`. `evaluate_models.py` scores the detectors on a COCO test set under `~/Projects/Datasets`.
 
 ## Performance work
 

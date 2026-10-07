@@ -197,10 +197,7 @@ def fake_ocr(monkeypatch, columns: list[tuple[str, float]]) -> None:
     probabilities = np.full((len(columns), len(alphabet)), 0.001, dtype=np.float32)
     for column, (character, probability) in enumerate(columns):
         probabilities[column, alphabet.index(character)] = probability
-    session = SimpleNamespace(
-        get_inputs=lambda: [SimpleNamespace(name="x")], run=lambda _outputs, _feed: [probabilities[None]]
-    )
-    monkeypatch.setattr(detector, "get_ocr", lambda _path: (session, alphabet))
+    monkeypatch.setattr(detector, "get_ocr", lambda _path: (lambda _batch: [probabilities[None]], alphabet))
 
 
 def test_ocr_reader_merges_repeats_and_keeps_the_longest_run_of_digits(monkeypatch):
