@@ -120,14 +120,15 @@ def test_votes_are_weighted_by_reading_confidence():
             return [Detection("0013", (0, 0, 2, 8), 0.3)]
 
     reader = Reader()
-    for frame_id in (1, 2, 3):
+    # 0012 stays the best number, so the track locks at frame 61 and is read again only 60 frames later.
+    for frame_id in (1, 61, 121):
         tracker.follow(frame(22), frame_id)
         tracker.read(frame(22), reader, frame_id)
 
     track = tracker.tracks[0]
     assert track.votes["0013"] == pytest.approx(0.9)
     assert track.best_bib == "0012"
-    assert track.last_read_frame == 3
+    assert track.last_read_frame == 121
 
 
 def test_a_longer_bib_outweighs_a_few_shorter_votes_but_not_many():
@@ -136,10 +137,10 @@ def test_a_longer_bib_outweighs_a_few_shorter_votes_but_not_many():
     tracker.correct(frame(), [BibDetection((20, 20, 35, 20), "1234", 1.0)], 0)
     track = tracker.tracks[0]
 
-    track.add_vote("12345", 0.3)
+    track.add_vote("12345", 0.3, 10)
     assert track.best_bib == "12345"
 
-    track.add_vote("1234", 0.6)
+    track.add_vote("1234", 0.6, 20)
     assert track.best_bib == "1234"
 
 
@@ -204,6 +205,7 @@ def test_results_include_best_bib_and_visible_times():
             "track_id": 0,
             "best_bib": "007",
             "votes": {"007": pytest.approx(0.9)},
+            "readings": [{"frame": 0, "seconds": 0.0, "bib": "007", "confidence": pytest.approx(0.9)}],
             "conflicting": False,
             "first_frame": 0,
             "last_frame": 1,
@@ -211,3 +213,40 @@ def test_results_include_best_bib_and_visible_times():
             "last_seconds": 0.1,
         }
     ]
+
+
+def test_a_track_locks_after_three_steady_readings_and_a_longer_reading_unlocks_it():
+    tracker = Tracker()
+    tracker.follow(frame(), 0)
+    tracker.correct(frame(), [BibDetection((20, 20, 35, 20), "1146", 0.9)], 0)
+    track = tracker.tracks[0]
+
+    track.add_vote("1146", 0.9, 10)
+    assert not track.locked
+    # A misread that leaves 1146 the best number still counts as a steady reading.
+    track.add_vote("5146", 0.9, 20)
+    assert track.locked
+    assert not track.wants_reading(30)
+    assert track.wants_reading(20 + tracker_module.LOCKED_READ_EVERY)
+
+    # 1146 is still the best number, but 11461 adds a digit the reader may have dropped.
+    track.add_vote("11461", 0.1, 80)
+    assert track.best_bib == "1146"
+    assert not track.locked
+
+
+def test_an_overlapping_newer_track_with_the_same_number_merges_into_the_older_one():
+    tracker = Tracker()
+    tracker.follow(frame(), 0)
+    tracker.correct(frame(), [BibDetection((20, 20, 35, 20), "0012", 0.9)], 0)
+
+    # The second box overlaps the track too little to match it, so it starts a track that is then merged.
+    tracker.follow(frame(), 1)
+    tracker.correct(
+        frame(), [BibDetection((20, 20, 35, 20), "0012", 0.9), BibDetection((40, 20, 35, 20), "0012", 0.9)], 1
+    )
+
+    (track,) = tracker.tracks
+    assert track.track_id == 0
+    assert track.votes == {"0012": pytest.approx(2.7)}
+    assert [frame_id for frame_id, _bib, _confidence in track.readings] == [0, 1, 1]

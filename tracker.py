@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from itertools import count
 from typing import TypedDict
 
 import cv2 as cv
@@ -25,12 +26,26 @@ FLOW_SCALE = 0.5
 # of 3 to 5 did best there. Plain sums lost 11116 to 1116, and strict length priority let a single misread
 # 12461 beat thirteen votes for 3246.
 DIGIT_WEIGHT = 5
+# A track is locked once its best number stayed the same over this many readings in a row. A locked track is read
+# only every LOCKED_READ_EVERY frames instead of every read_every, so later readings can still correct it. On
+# sample1 this cut reader calls from 238 to 123 with the same 13/13 (30 frames: 152, 120: 109). Never reading a
+# locked track again (94 calls) kept 6240 locked on 5240 after reading 5240, 6240, 6740.
+LOCK_READS = 3
+LOCKED_READ_EVERY = 60
+
+
+class Reading(TypedDict):
+    frame: int
+    seconds: float
+    bib: str
+    confidence: float
 
 
 class TrackResult(TypedDict):
     track_id: int
     best_bib: str | None
     votes: dict[str, float]
+    readings: list[Reading]
     conflicting: bool
     first_frame: int
     last_frame: int
@@ -103,6 +118,17 @@ def _move_tracks(
     return moves
 
 
+def _best(votes: dict[str, float]) -> str:
+    """Return the number with the most votes, weighted by DIGIT_WEIGHT per digit. A tie keeps the first seen."""
+    return max(votes, key=lambda bib: votes[bib] * DIGIT_WEIGHT ** len(bib))
+
+
+def _extends(longer: str, shorter: str) -> bool:
+    """Whether ``longer`` is ``shorter`` with digits added, as 11461 is to 1146: a digit the reader had dropped."""
+    digits = iter(longer)
+    return len(longer) > len(shorter) and all(digit in digits for digit in shorter)
+
+
 def _iou(first: BBox, second: BBox) -> float:
     x1, y1, width1, height1 = first
     x2, y2, width2, height2 = second
@@ -123,6 +149,8 @@ class Track:
     last_detection_frame: int
     last_read_frame: int = -1
     votes: dict[str, float] = field(factory=dict)
+    # Every reading in order, as (frame, bib, confidence), so a rule can weigh agreement over time.
+    readings: list[tuple[int, str, float]] = field(factory=list)
     active: bool = True
 
     @property
@@ -132,17 +160,43 @@ class Track:
         A reading's accumulated confidence is weighted by DIGIT_WEIGHT per digit, so one more digit counts five
         times as much. A tie returns the reading seen first, in vote order.
         """
-        if not self.votes:
-            return None
-        return max(self.votes, key=lambda bib: self.votes[bib] * DIGIT_WEIGHT ** len(bib))
+        return _best(self.votes) if self.votes else None
+
+    @property
+    def locked(self) -> bool:
+        """Whether the best number stayed the same over the last LOCK_READS readings.
+
+        A reading that extends the best number (11461 when the best is 1146) restarts the count, since the reader
+        drops digits far more often than it invents them. Any other disagreeing reading counts as long as the best
+        number does not change, so a single misread does not unlock a well-read track.
+        """
+        votes: dict[str, float] = {}
+        best, stable = None, 0
+        for _frame, bib, confidence in self.readings:
+            votes[bib] = votes.get(bib, 0.0) + confidence
+            new_best = _best(votes)
+            if new_best != best:
+                stable = 1
+            elif best is not None and _extends(bib, best):
+                stable = 0
+            else:
+                stable += 1
+            best = new_best
+        return stable >= LOCK_READS
+
+    def wants_reading(self, frame_id: int) -> bool:
+        """Whether this track should be read on this frame: always while unlocked, then every LOCKED_READ_EVERY."""
+        return not self.locked or frame_id - self.last_read_frame >= LOCKED_READ_EVERY
 
     @property
     def conflicting(self) -> bool:
         return len(self.votes) > 1
 
-    def add_vote(self, bib: str, confidence: float) -> None:
-        """Accumulate confidence for one reading."""
+    def add_vote(self, bib: str, confidence: float, frame_id: int) -> None:
+        """Accumulate confidence for one reading and remember when it was read."""
         self.votes[bib] = self.votes.get(bib, 0.0) + confidence
+        self.readings.append((frame_id, bib, confidence))
+        self.last_read_frame = frame_id
 
 
 class Tracker:
@@ -160,6 +214,8 @@ class Tracker:
         self.reader_fn = reader_fn or BIB_READERS["yolov4"]
         self.previous_gray: cv.typing.MatLike | None = None
         self.tracks: list[Track] = []
+        # Merged tracks leave ``tracks``, so IDs come from a counter rather than the list length.
+        self._track_ids = count()
 
     @property
     def active_tracks(self) -> list[Track]:
@@ -216,7 +272,7 @@ class Tracker:
                 continue
             else:
                 track = Track(
-                    len(self.tracks),
+                    next(self._track_ids),
                     detection.bbox,
                     np.empty((0, 1, 2), dtype=np.float32),
                     frame_id,
@@ -231,19 +287,58 @@ class Tracker:
             track.last_frame = frame_id
             track.last_detection_frame = frame_id
             if detection.bib_string is not None:
-                track.add_vote(detection.bib_string, detection.confidence)
-                track.last_read_frame = frame_id
+                track.add_vote(detection.bib_string, detection.confidence, frame_id)
             used_tracks.add(track.track_id)
+        self._merge_duplicates()
+
+    def needs_reading(self, bbox: BBox, frame_id: int) -> bool:
+        """Whether a detected box should be read, which is not when it matches a locked track not due for reading."""
+        return not any(
+            _iou(track.bbox, bbox) >= MATCH_IOU and not track.wants_reading(frame_id) for track in self.active_tracks
+        )
 
     def read(self, frame: cv.typing.MatLike, reader: DetectorLike, frame_id: int) -> None:
         """Read active bibs that the detector did not already read on this frame."""
         for track in self.active_tracks:
-            if track.last_detection_frame == frame_id:
+            if track.last_detection_frame == frame_id or not track.wants_reading(frame_id):
                 continue
             reading = self.reader_fn(frame, track.bbox, reader, self.bib_pattern)
             if reading is not None:
-                track.add_vote(reading.bib_string, reading.confidence)
-                track.last_read_frame = frame_id
+                track.add_vote(reading.bib_string, reading.confidence, frame_id)
+        self._merge_duplicates()
+
+    def _merge_duplicates(self) -> None:
+        """Fold a newer active track into an older one with the same best number when their boxes overlap.
+
+        One runner wears one bib, so such tracks are one runner, typically a new track started after an occlusion
+        while the old one still followed something nearby. The older track keeps its ID and first frame, takes the
+        votes and readings of the newer one, and its box and points when the newer one was detected more recently.
+        """
+        tracks = self.active_tracks
+        for index, newer in enumerate(tracks):
+            older = next(
+                (
+                    track
+                    for track in tracks[:index]
+                    if track.active
+                    and newer.best_bib is not None
+                    and track.best_bib == newer.best_bib
+                    and _iou(track.bbox, newer.bbox) > 0
+                ),
+                None,
+            )
+            if older is None:
+                continue
+            for bib, confidence in newer.votes.items():
+                older.votes[bib] = older.votes.get(bib, 0.0) + confidence
+            older.readings = sorted(older.readings + newer.readings)
+            older.last_frame = max(older.last_frame, newer.last_frame)
+            older.last_read_frame = max(older.last_read_frame, newer.last_read_frame)
+            if newer.last_detection_frame > older.last_detection_frame:
+                older.bbox, older.points = newer.bbox, newer.points
+                older.last_detection_frame = newer.last_detection_frame
+            newer.active = False
+            self.tracks.remove(newer)
 
     def results(self, fps: float) -> list[TrackResult]:
         """Return the final bib and visible times for every track."""
@@ -252,6 +347,10 @@ class Tracker:
                 "track_id": track.track_id,
                 "best_bib": track.best_bib,
                 "votes": dict(track.votes),
+                "readings": [
+                    {"frame": frame, "seconds": frame / fps, "bib": bib, "confidence": confidence}
+                    for frame, bib, confidence in track.readings
+                ],
                 "conflicting": track.conflicting,
                 "first_frame": track.first_frame,
                 "last_frame": track.last_frame,

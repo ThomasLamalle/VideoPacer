@@ -17,7 +17,9 @@ import logging
 import platform
 import re
 import subprocess
+from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 from math import isfinite
 from pathlib import Path
 from time import perf_counter
@@ -128,15 +130,29 @@ def detect_bibs(
     model: detector.DetectorConfig,
     config: RunConfig,
     timings: Timings | None = None,
+    should_read: Callable[[detector.BBox], bool] = lambda _bbox: True,
 ) -> list[BibDetection]:
-    """Find bib boxes and read their numbers in one video frame."""
+    """Find bib boxes and read their numbers in one video frame.
+
+    A box for which ``should_read`` is false is kept unread, with a None ``bib_string``.
+    """
     started = perf_counter()
     boxes = detector.BIB_DETECTORS[config.bib_detector](frame, model)
     if timings is not None:
         timings["detection"] += perf_counter() - started
 
     started = perf_counter()
-    bibs = detector.read_bibs(frame, boxes, DIGIT_MODEL, config.bib_pattern, config.digit_reader)
+    wanted = [should_read(box.bbox) for box in boxes]
+    read = iter(
+        detector.read_bibs(
+            frame,
+            [box for box, want in zip(boxes, wanted, strict=True) if want],
+            DIGIT_MODEL,
+            config.bib_pattern,
+            config.digit_reader,
+        )
+    )
+    bibs = [next(read) if want else BibDetection(box.bbox, None, 0.0) for box, want in zip(boxes, wanted, strict=True)]
     if timings is not None:
         timings["digit_reading"] += perf_counter() - started
     return bibs
@@ -339,7 +355,9 @@ def process_video(
 
             scheduled = frame_id % config.detect_every == 0
             if scheduled:
-                detections = detect_bibs(frame, bib_model, config, timings)
+                detections = detect_bibs(
+                    frame, bib_model, config, timings, partial(tracker.needs_reading, frame_id=frame_id)
+                )
                 detection_frames.append(frame_id)
                 # Seeding new tracking points belongs to the tracking cost, so it is counted with optical flow.
                 stage_started = perf_counter()

@@ -28,7 +28,6 @@ Keep measuring and improving speed alongside recognition and result review. The 
 - **Feature 28:** When a track loses optical flow, run the detector on the next frame instead of waiting for the scheduled one. The tracker already deactivates lost tracks so the caller can see them.
 - **Feature 6:** Combine partial and conflicting readings within a track, and keep unknown digits rather than guessing a complete number. The reader often drops one of two repeated digits (11461 read as 1461 or 1146), so partial readings carry real evidence.
 - **Feature 27:** Weight votes by the time between readings: readings far apart in time are more likely to be right than readings on consecutive frames.
-- **Feature 7:** Lock a track's number after enough agreement, to stop reading it again. Reopen the decision when stronger contradicting evidence appears or the track identity becomes uncertain. Repeated similar frames are not independent proof. Reading is now the slowest stage, so this also saves time.
 - **Feature 23:** Rename `bib_string` to `bib_number`. Readings are digits only now, but keep a string so leading zeros survive.
 
 ## Speed
@@ -76,4 +75,5 @@ Keep measuring and improving speed alongside recognition and result review. The 
 - 2026-10-07: YOLO26n v025 detector through OpenVINO and PP-OCRv6 reader through ONNX Runtime. On sample1: 13/13 runners and none wrong, against 11/13 with one wrong, and about twice as fast.
 - 2026-10-07: tracking speed-ups. One optical-flow call for all tracks, corner search near each box, and flow on half-size frames. Tracking on sample1 went from 7.1 s to 3.0 s.
 - 2026-10-07: votes weighted ×5 per digit, the rule this list originally asked for. It had been built as strict length priority, which let a single invented 5-digit reading win. The reader drops a repeated digit 7 to 10 times more often than it invents one.
+- 2026-10-07: OCR through OpenVINO instead of ONNX Runtime (same ONNX file, same outputs), then Feature 7: a track is locked after 3 readings with the same best number and read every 60 frames instead of 10, and a longer reading containing the number unlocks it. Overlapping active tracks with the same number merge into the older one (part of Feature 26). On sample1, reader calls went from 238 to 123 and reading from 5.4 s to 1.8 s, still 13/13.
 - Tried and dropped: showing the vote counts of the two leading readings next to each box. It was hard to read.
