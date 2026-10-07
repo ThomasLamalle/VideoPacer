@@ -17,6 +17,14 @@ MATCH_IOU = 0.3
 # A corner score looks at a few pixels around each pixel (gradient, scoring window and peak picking), so the
 # corner search runs on the box plus this many pixels. Scoring a whole 1080p frame for one box cost about 55 ms.
 CORNER_CONTEXT = 4
+# Optical flow follows the points on frames shrunk by this factor. Building the image pyramids of both frames,
+# each way, was most of the tracking cost, and a half-size frame has a quarter of the pixels.
+FLOW_SCALE = 0.5
+# Each digit multiplies a reading's votes by this weight. The reader drops one of two repeated digits far more
+# often than it invents one (on sample1, 43 wrong votes against 6), so a longer reading should weigh more. Weights
+# of 3 to 5 did best there. Plain sums lost 11116 to 1116, and strict length priority let a single misread
+# 12461 beat thirteen votes for 3246.
+DIGIT_WEIGHT = 5
 
 
 class TrackResult(TypedDict):
@@ -63,7 +71,8 @@ def _move_tracks(
     All tracks share one optical-flow call each way. A call spends most of its time building image pyramids of
     both frames, so one call per track multiplied that cost by the number of tracks. Each point is followed on its
     own, so sharing the call does not change any result. A point counts only if following it back to the previous
-    frame lands within MAX_FLOW_ERROR pixels of where it started.
+    frame lands within MAX_FLOW_ERROR pixels of where it started. Points live on the frames shrunk by FLOW_SCALE,
+    so their motion is scaled back up to move the full-size box.
     """
     moves: list[tuple[BBox, np.ndarray] | None] = [None] * len(tracks)
     followed = [index for index, track in enumerate(tracks) if len(track.points) >= MIN_POINTS]
@@ -87,7 +96,7 @@ def _move_tracks(
         if keep.sum() >= MIN_POINTS:
             old_points = points[start:end][keep].reshape(-1, 2)
             new_points = moved[start:end][keep].reshape(-1, 2)
-            dx, dy = np.median(new_points - old_points, axis=0)
+            dx, dy = np.median(new_points - old_points, axis=0) / FLOW_SCALE
             x, y, width, height = track.bbox
             moves[index] = (x + float(dx), y + float(dy), width, height), new_points.reshape(-1, 1, 2)
         start = end
@@ -120,12 +129,12 @@ class Track:
     def best_bib(self) -> str | None:
         """Return the reading with the most confidence behind it.
 
-        Prefer the longest reading, then its accumulated confidence. A tie returns
-        the reading seen first, in vote order.
+        A reading's accumulated confidence is weighted by DIGIT_WEIGHT per digit, so one more digit counts five
+        times as much. A tie returns the reading seen first, in vote order.
         """
         if not self.votes:
             return None
-        return max(self.votes, key=lambda bib: (len(bib), self.votes[bib]))
+        return max(self.votes, key=lambda bib: self.votes[bib] * DIGIT_WEIGHT ** len(bib))
 
     @property
     def conflicting(self) -> bool:
@@ -164,6 +173,7 @@ class Tracker:
         scheduled scan.
         """
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        gray = cv.resize(gray, None, fx=FLOW_SCALE, fy=FLOW_SCALE, interpolation=cv.INTER_AREA)
         if self.previous_gray is None:
             self.previous_gray = gray
             return
@@ -216,7 +226,8 @@ class Tracker:
                 self.tracks.append(track)
 
             track.bbox = detection.bbox
-            track.points = _find_points(gray, detection.bbox)
+            # Corners are found at full size, so a small bib keeps as many points, then moved onto the shrunk frames.
+            track.points = _find_points(gray, detection.bbox) * FLOW_SCALE
             track.last_frame = frame_id
             track.last_detection_frame = frame_id
             if detection.bib_string is not None:
